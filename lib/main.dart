@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:le_commercant/login.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(const MyApp(startPage: LoginPage(),));
 }
 
 class MyApp extends StatelessWidget {
