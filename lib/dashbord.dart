@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'register.dart';
-
+import 'stock.dart';
 // ══════════════════════════════════════════════════════════════
 // MODÈLES DE DONNÉES
 // ══════════════════════════════════════════════════════════════
@@ -362,13 +362,21 @@ class _DashboardPageState extends State<DashboardPage>
                 bgColor: _blueLight,
                 onTap: () => _showSnack('🏭 Page Fournisseurs'),
               ),
-              const SizedBox(width: 10),
+               const SizedBox(width: 10),
               _QuickBtn(
                 label: 'Stock',
                 emoji: '🧺',
                 bgColor: _greenLight,
-                onTap: () => _showSnack('🧺 Page Stock'),
-              ),
+                onTap: () {
+                  _showSnack('🧺 Page Stock');
+                  Navigator.push(
+                    context,
+                 MaterialPageRoute(
+                   builder: (context) => const StockPage(),
+                     ),
+                );
+              },
+           ),
               const SizedBox(width: 10),
               _QuickBtn(
                 label: 'Mes\nventes',
