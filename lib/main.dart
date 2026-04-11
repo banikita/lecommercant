@@ -1,36 +1,50 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
 import 'register.dart';
 import 'login.dart';
-import 'dashbord.dart';
-
-// ══════════════════════════════════════════════════════════════
-//  POINT D'ENTRÉE
-//  Logique :
-//    1. Jamais installé      → RegisterPage
-//    2. Compte créé, app fermée → LoginPage (PIN)
-//    3. Déjà connecté (session active) → DashboardPage
-// ══════════════════════════════════════════════════════════════
+import 'dashbord.dart'; // Attention à l'orthographe (dashboard.dart ?)
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // 1. Initialiser Supabase en premier
+  await Supabase.initialize(
+    url: 'https://hujnwvmaerycpbhbeotk.supabase.co',
+    anonKey: 'sb_publishable_DevNqvnZYSHRt9k3Omt5mw_bjagi3LA',
+  );
+
   final prefs = await SharedPreferences.getInstance();
 
-  // Clés stockées localement
+  // 2. Récupérer l'état et les infos stockées
   final bool isRegistered = prefs.getBool('is_registered') ?? false;
   final bool isLoggedIn   = prefs.getBool('is_logged_in')  ?? false;
+  
+  // Données dynamiques
+  final int id       = prefs.getInt('commercant_id')     ?? 0;
+  final String nom   = prefs.getString('nom_commercant') ?? '';
+  final String boutique = prefs.getString('nom_boutique')   ?? '';
+  final String ville = prefs.getString('ville')          ?? '';
 
   Widget startPage;
+
   if (!isRegistered) {
-    startPage = const RegisterPage();          // 1re installation
+    // Cas 1 : Jamais inscrit
+    startPage = const RegisterPage();
   } else if (!isLoggedIn) {
-    startPage = const LoginPage();            // Compte existant → PIN
+    // Cas 2 : Inscrit mais session expirée (demande du PIN)
+    // On envoie les données pour que la LoginPage sache QUI se connecte
+    startPage = LoginPage(
+      commercantId: id,
+      nomCommercant: nom,
+      nomBoutique: boutique,
+      ville: ville,
+    );
   } else {
-    // Session encore active (rare, mais possible en dev)
-    final nom      = prefs.getString('nom_commercant') ?? '';
-    final boutique = prefs.getString('nom_boutique')   ?? '';
-    final ville    = prefs.getString('ville')          ?? '';
+    // Cas 3 : Déjà connecté
     startPage = DashboardPage(
+      commercantId: id,
       nomCommercant: nom,
       nomBoutique: boutique,
       ville: ville,

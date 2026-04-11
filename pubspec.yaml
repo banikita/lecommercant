@@ -1,6 +1,5 @@
 name: le_commercant
-description: Application de gestion commerciale pour commerçants
-
+description: Application de gestion commerciale pour commerçants au Sénégal
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -11,11 +10,16 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # ── Persistance locale (1re installation / sessions)
+  # ── Persistance & Base de données (Locale et Cloud)
   shared_preferences: ^2.2.2
+  sqflite: ^2.3.0
+  path: ^1.9.0
+  supabase_flutter: ^2.3.0
 
-  # ── Fonts Google
-  google_fonts: ^6.1.0
+  # ── Sécurité & Utilitaires
+  crypto: ^3.0.3           # SHA-256 pour hasher le PIN
+  intl: ^0.18.1
+  uuid: ^4.3.3
 
 dev_dependencies:
   flutter_test:
@@ -24,11 +28,3 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-
-  # ── Décommentez si vous ajoutez une police locale
-  # fonts:
-  #   - family: Nunito
-  #     fonts:
-  #       - asset: assets/fonts/Nunito-Regular.ttf
-  #       - asset: assets/fonts/Nunito-Bold.ttf
-  #         weight: 700
