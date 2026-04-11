@@ -9,7 +9,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-
+  mobile_scanner: ^5.2.1
+  
   # ── Persistance & Base de données (Locale et Cloud)
   shared_preferences: ^2.2.2
   sqflite: ^2.3.0

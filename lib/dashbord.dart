@@ -269,7 +269,7 @@ class _DashboardPageState extends State<DashboardPage>
               onTap: () => _goTo(const PageFournisseurs())),
           const SizedBox(width: 10),
           _QBtn(label: 'Stock', emoji: '🧺', bg: _greenLight,
-              onTap: () => _goTo(const PageStock())),
+              onTap: () => _goTo(const StockPage())),
           const SizedBox(width: 10),
           _QBtn(label: 'Mes\nventes', emoji: '📈', bg: _amberLight,
               onTap: () => _goTo(const PageVentes(commercantId: 0))),
