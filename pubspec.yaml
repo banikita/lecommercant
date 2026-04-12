@@ -1,33 +1,37 @@
 name: le_commercant
-description: Application de gestion commerciale pour commerçants
-
+description: Application de gestion commerciale pour commerçants au Sénégal
 publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: '>=3.10.0 <4.0.0'
+  sdk: '>=3.0.0 <4.0.0'
 
 dependencies:
-  mobile_scanner: ^5.2.3
   flutter:
     sdk: flutter
 
-  # The following adds the Cupertino Icons font to your application.
-  # Use with the CupertinoIcons class for iOS style icons.
-  cupertino_icons: ^1.0.8
+  mobile_scanner: ^3.5.5
+  
+
+  # ── Persistance & Base de données (Locale et Cloud)
+  shared_preferences: ^2.2.2
+  sqflite: ^2.3.0
+  path: ^1.9.0
+  supabase_flutter: ^2.3.0
+
+  # ── Sécurité & Utilitaires
+  crypto: ^3.0.3           # SHA-256 pour hasher le PIN
+  intl: ^0.18.1
+  uuid: ^4.3.3
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^3.0.0
-  shared_preferences: ^2.2.2
 
 flutter:
-   uses-material-design: true
-   assets:
+
+  uses-material-design: true
+  assets:
     - lib/assets/categories/
     - lib/assets/images/
-    
-   
-
- 
