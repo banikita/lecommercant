@@ -1,18 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-
+import 'package:flutter/foundation.dart'; // Pour kIsWeb
+import 'package:sqflite/sqflite.dart'; // Ajoute ça !
 import 'register.dart';
 import 'login.dart';
 import 'dashbord.dart'; // Attention à l'orthographe (dashboard.dart ?)
-
+import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
+if (kIsWeb) {
+    // Initialise la base de données pour le navigateur (Edge/Chrome)
+    databaseFactory = databaseFactoryFfiWeb;
+  }
+  // -------------
   // 1. Initialiser Supabase en premier
   await Supabase.initialize(
     url: 'https://hujnwvmaerycpbhbeotk.supabase.co',
-    anonKey: 'sb_publishable_DevNqvnZYSHRt9k3Omt5mw_bjagi3LA',
+    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh1am53dm1hZXJ5Y3BiaGJlb3RrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4NTA2MDAsImV4cCI6MjA5MTQyNjYwMH0.80VxMKN-_WKfU--hAe85D7s-v_TdKTN-bsQXi9ZxmpU',
   );
 
   final prefs = await SharedPreferences.getInstance();

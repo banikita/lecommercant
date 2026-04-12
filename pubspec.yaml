@@ -10,10 +10,12 @@ dependencies:
   flutter:
     sdk: flutter
   mobile_scanner: ^5.2.1
-  
+
+  sqflite_common_ffi: ^2.3.0
+  sqflite_common_ffi_web: ^0.4.0
   # ── Persistance & Base de données (Locale et Cloud)
   shared_preferences: ^2.2.2
-  sqflite: ^2.3.0
+  sqflite: ^2.4.2
   path: ^1.9.0
   supabase_flutter: ^2.3.0
 
@@ -21,6 +23,7 @@ dependencies:
   crypto: ^3.0.3           # SHA-256 pour hasher le PIN
   intl: ^0.18.1
   uuid: ^4.3.3
+  
 
 dev_dependencies:
   flutter_test:

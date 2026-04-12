@@ -1,17 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:le_commercant/database/app_database.dart';
 import 'dashbord.dart';
-import 'register.dart';
 
 // ══════════════════════════════════════════════════════════════
-//  LOGIN PAGE (PIN) — Branchée sur AppDatabase
-//
-//  Actions DB :
-//    • AppDatabase.verifierPin()          → compare le PIN hashé
-//    • AppDatabase.incrementerTentatives() → compte les erreurs
-//    • AppDatabase.reinitialiserTentatives() → remet à 0 au succès
-//    • AppDatabase.ouvrirSession()        → crée la session active
-//    • AppDatabase.mettreAJourPin()       → réinitialisation PIN
+//  LOGIN PAGE — Style Wave (PIN screen)
+//  Logo : remplacez le widget _buildLogo() par votre propre logo
 // ══════════════════════════════════════════════════════════════
 
 class LoginPage extends StatefulWidget {
@@ -33,404 +27,544 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
 
-  static const _green      = Color(0xFF0F6E56);
-  static const _greenLight = Color(0xFFE1F5EE);
-  static const _greenDot   = Color(0xFF1D9E75);
-  static const _greenEmpty = Color(0xFFB4B2A9);
-  static const _red        = Color(0xFFA32D2D);
-  static const _redLight   = Color(0xFFFCEBEB);
-  static const _grey       = Color(0xFFF4F4F2);
-  static const _greyMid    = Color(0xFFE8E8E5);
-  static const _amberMid   = Color(0xFFFAC775);
-  static const _text       = Color(0xFF1A1A1A);
-  static const _textMuted  = Color(0xFF6B7280);
-  static const _pinLength  = 4;
-  static const _maxTentatives = 5;
+  // ── Couleurs Wave (bleu clair)
+  static const _waveBlueFill  = Color(0xFF90CAF9); // point rempli
+  static const _waveBlueEmpty = Color(0xFFBBDEFB); // point vide
+  static const _waveBlue      = Color(0xFF1E88E5); // liens + textes
+  static const _deleteColor   = Color(0xFF424242); // bouton effacer
+  static const _keyColor      = Color(0xFF212121); // chiffres
+  static const _subText       = Color(0xFF757575); // sous-titre
+  static const _red           = Color(0xFFE53935); // erreur
+  static const _green         = Color(0xFF0F6E56); // succès
 
-  String _pin        = '';
-  int    _erreurs    = 0;
-  bool   _verifie    = false;
-  bool   _secoue     = false;
+  static const int _pinLength     = 4;
+  static const int _maxTentatives = 5;
+
+  String _pin       = '';
+  int    _erreurs   = 0;
+  bool   _checking  = false;
+  bool   _shaking   = false;
 
   final _db = AppDatabase.instance;
 
   late AnimationController _shakeCtrl;
   late Animation<double>   _shakeAnim;
-
-  String get _initiales {
-    final p = widget.nomCommercant.trim().split(' ');
-    return p.length >= 2
-        ? '${p[0][0]}${p[1][0]}'.toUpperCase()
-        : widget.nomCommercant.substring(0, 2).toUpperCase();
-  }
+  late AnimationController _dotCtrl;
+  late Animation<double>   _dotAnim;
 
   @override
   void initState() {
     super.initState();
-    _shakeCtrl = AnimationController(vsync: this,
-        duration: const Duration(milliseconds: 500));
-    _shakeAnim = Tween<double>(begin: 0, end: 1).animate(
-        CurvedAnimation(parent: _shakeCtrl, curve: Curves.elasticOut));
+
+    // Animation secousse (erreur PIN)
+    _shakeCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 480));
+    _shakeAnim = TweenSequence<double>([
+      TweenSequenceItem(tween: Tween(begin: 0.0, end: -12.0), weight: 1),
+      TweenSequenceItem(tween: Tween(begin: -12.0, end: 12.0), weight: 2),
+      TweenSequenceItem(tween: Tween(begin: 12.0, end: -8.0),  weight: 2),
+      TweenSequenceItem(tween: Tween(begin: -8.0, end: 8.0),   weight: 2),
+      TweenSequenceItem(tween: Tween(begin: 8.0, end: 0.0),    weight: 1),
+    ]).animate(_shakeCtrl);
+
+    // Animation point (remplissage)
+    _dotCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 120));
+    _dotAnim = CurvedAnimation(parent: _dotCtrl, curve: Curves.easeOut);
   }
 
   @override
   void dispose() {
     _shakeCtrl.dispose();
+    _dotCtrl.dispose();
     super.dispose();
   }
 
-  void _onTouche(String key) {
-    if (_verifie || _pin.length >= _pinLength) return;
+  // ══════════════════════════════════════
+  //  LOGIQUE PIN
+  // ══════════════════════════════════════
+
+  void _onKey(String key) {
+    if (_checking || _pin.length >= _pinLength) return;
+
+    HapticFeedback.lightImpact(); // vibration tactile
+
+    _dotCtrl.reset();
+    _dotCtrl.forward();
+
     setState(() => _pin += key);
-    if (_pin.length == _pinLength) _verifierPin();
-  }
 
-  void _effacer() {
-    if (_pin.isNotEmpty) setState(() => _pin = _pin.substring(0, _pin.length - 1));
-  }
-
-  // ──────────────────────────────────────
-  //  VÉRIFICATION PIN — lecture DB
-  // ──────────────────────────────────────
-  Future<void> _verifierPin() async {
-    setState(() => _verifie = true);
-
-    // Vérification en DB (PIN hashé)
-    final correct = await _db.verifierPin(widget.commercantId, _pin);
-
-    if (correct) {
-      // ── Succès : ouvrir la session + naviguer
-      await _db.reinitialiserTentatives(widget.commercantId);
-      await _db.ouvrirSession(widget.commercantId);
-
-      if (!mounted) return;
-      Navigator.pushReplacement(context, PageRouteBuilder(
-        pageBuilder: (_, __, ___) => DashboardPage(
-          commercantId:  widget.commercantId,
-          nomCommercant: widget.nomCommercant,
-          nomBoutique:   widget.nomBoutique,
-          ville:         widget.ville,
-        ),
-        transitionsBuilder: (_, a, __, child) =>
-            FadeTransition(opacity: a, child: child),
-        transitionDuration: const Duration(milliseconds: 450),
-      ));
-
-    } else {
-      // ── Erreur : incrémenter en DB + animer
-      final tentatives = await _db.incrementerTentatives(widget.commercantId);
-
-      setState(() {
-        _erreurs = tentatives;
-        _verifie = false;
-        _secoue  = true;
-        _pin     = '';
-      });
-      _shakeCtrl.reset();
-      _shakeCtrl.forward();
-      Future.delayed(const Duration(milliseconds: 800),
-          () { if (mounted) setState(() => _secoue = false); });
-
-      // Bloquer après 5 tentatives
-      if (tentatives >= _maxTentatives) _afficherBlocage();
+    if (_pin.length == _pinLength) {
+      Future.delayed(const Duration(milliseconds: 120), _verifier);
     }
   }
 
-  void _afficherBlocage() {
-    showDialog(context: context, barrierDismissible: false,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: const Row(children: [
-          Icon(Icons.lock_person_rounded, color: _red, size: 22),
-          SizedBox(width: 10),
-          Text('Compte bloqué', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
-        ]),
-        content: const Text(
-            '5 tentatives incorrectes.\nVérifiez votre numéro de téléphone pour réinitialiser votre PIN.',
-            style: TextStyle(fontSize: 13, height: 1.5)),
-        actions: [
-          TextButton(onPressed: () { Navigator.pop(context); _ouvrirResetPin(); },
-            child: const Text('Réinitialiser', style: TextStyle(color: _red, fontWeight: FontWeight.w700))),
-        ]));
+  void _onDelete() {
+    if (_pin.isEmpty) return;
+    HapticFeedback.selectionClick();
+    setState(() => _pin = _pin.substring(0, _pin.length - 1));
   }
 
-  // ── Oublié PIN : vérifier le téléphone en DB
-  void _ouvrirOubliPin() {
+  Future<void> _verifier() async {
+    setState(() => _checking = true);
+
+    final correct = await _db.verifierPin(widget.commercantId, _pin);
+
+    if (correct) {
+      // ── Succès
+      await _db.reinitialiserTentatives(widget.commercantId);
+      await _db.ouvrirSession(widget.commercantId);
+      if (!mounted) return;
+
+      Navigator.pushReplacement(
+        context,
+        PageRouteBuilder(
+          pageBuilder: (_, __, ___) => DashboardPage(
+            commercantId:  widget.commercantId,
+            nomCommercant: widget.nomCommercant,
+            nomBoutique:   widget.nomBoutique,
+            ville:         widget.ville,
+          ),
+          transitionsBuilder: (_, anim, __, child) =>
+              FadeTransition(opacity: anim, child: child),
+          transitionDuration: const Duration(milliseconds: 400),
+        ),
+      );
+    } else {
+      // ── Erreur
+      HapticFeedback.heavyImpact();
+      final tentatives = await _db.incrementerTentatives(widget.commercantId);
+
+      _shakeCtrl.reset();
+      _shakeCtrl.forward();
+
+      setState(() {
+        _erreurs  = tentatives;
+        _shaking  = true;
+        _checking = false;
+        _pin      = '';
+      });
+
+      Future.delayed(const Duration(milliseconds: 480),
+          () { if (mounted) setState(() => _shaking = false); });
+
+      if (tentatives >= _maxTentatives) _dialogBlocage();
+    }
+  }
+
+  void _dialogBlocage() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Compte bloqué',
+            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 17)),
+        content: const Text(
+            'Trop de tentatives incorrectes.\nVérifiez votre numéro pour réinitialiser votre PIN.',
+            style: TextStyle(fontSize: 14, height: 1.5)),
+        actions: [
+          TextButton(
+            onPressed: () { Navigator.pop(context); _sheetOubliPin(); },
+            child: const Text('Réinitialiser',
+                style: TextStyle(color: _red, fontWeight: FontWeight.w700))),
+        ],
+      ),
+    );
+  }
+
+  // ── Oublié PIN : vérifier le numéro en DB
+  void _sheetOubliPin() {
     final telCtrl = TextEditingController();
     bool erreur = false;
 
     showModalBottomSheet(
-      context: context, isScrollControlled: true,
+      context: context,
+      isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => StatefulBuilder(builder: (ctx, setBS) => Container(
-        margin: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-        decoration: const BoxDecoration(color: Colors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-        padding: const EdgeInsets.all(24),
-        child: Column(mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Center(child: Container(width: 40, height: 4,
-            decoration: BoxDecoration(color: const Color(0xFFD1D5DB),
-                borderRadius: BorderRadius.circular(2)))),
-          const SizedBox(height: 20),
-          const Text('Vérification du numéro',
-              style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800, color: _text)),
-          const SizedBox(height: 6),
-          const Text('Entrez le numéro associé à votre compte.',
-              style: TextStyle(color: _textMuted, fontSize: 13)),
-          const SizedBox(height: 18),
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setBS) => Padding(
+          padding: EdgeInsets.only(
+              bottom: MediaQuery.of(context).viewInsets.bottom),
+          child: Container(
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+            padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+            child: Column(mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start, children: [
+              // Handle
+              Center(child: Container(width: 40, height: 4,
+                margin: const EdgeInsets.only(bottom: 20),
+                decoration: BoxDecoration(color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(2)))),
 
-          // Champ téléphone
-          Container(
-            decoration: BoxDecoration(color: _grey, borderRadius: BorderRadius.circular(14)),
-            child: Row(children: [
+              const Text('Votre numéro de téléphone',
+                  style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 6),
+              const Text('Entrez le numéro lié à votre compte pour réinitialiser votre PIN.',
+                  style: TextStyle(color: Color(0xFF757575), fontSize: 13, height: 1.5)),
+              const SizedBox(height: 20),
+
+              // Champ téléphone
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-                decoration: const BoxDecoration(color: _greenLight,
-                  borderRadius: BorderRadius.only(
-                      topLeft: Radius.circular(14), bottomLeft: Radius.circular(14))),
-                child: const Row(children: [
-                  Text('🇸🇳', style: TextStyle(fontSize: 16)),
-                  SizedBox(width: 4),
-                  Text('+221', style: TextStyle(color: _green, fontSize: 13, fontWeight: FontWeight.w700)),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF5F5F5),
+                  borderRadius: BorderRadius.circular(14)),
+                child: Row(children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
+                    decoration: const BoxDecoration(
+                      color: Color(0xFFE3F2FD),
+                      borderRadius: BorderRadius.only(
+                          topLeft: Radius.circular(14), bottomLeft: Radius.circular(14))),
+                    child: const Row(children: [
+                      Text('🇸🇳', style: TextStyle(fontSize: 18)),
+                      SizedBox(width: 6),
+                      Text('+221', style: TextStyle(
+                          color: _waveBlue, fontSize: 14, fontWeight: FontWeight.w700)),
+                    ])),
+                  Expanded(child: TextField(
+                    controller: telCtrl,
+                    keyboardType: TextInputType.phone, maxLength: 9,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    style: const TextStyle(fontSize: 16),
+                    decoration: const InputDecoration(
+                      counterText: '', border: InputBorder.none,
+                      hintText: '77 000 00 00',
+                      hintStyle: TextStyle(color: Color(0xFFBDBDBD)),
+                      contentPadding: EdgeInsets.symmetric(horizontal: 14, vertical: 16)))),
                 ])),
-              Expanded(child: TextField(controller: telCtrl,
-                keyboardType: TextInputType.phone, maxLength: 9,
-                style: const TextStyle(fontSize: 14, color: _text),
-                decoration: const InputDecoration(counterText: '',
-                  hintText: '77 000 00 00',
-                  hintStyle: TextStyle(color: _textMuted, fontSize: 13),
-                  border: InputBorder.none,
-                  contentPadding: EdgeInsets.symmetric(horizontal: 14, vertical: 14)))),
-            ])),
 
-          if (erreur) ...[
-            const SizedBox(height: 8),
-            const Text('❌ Numéro non reconnu.',
-                style: TextStyle(color: _red, fontSize: 12, fontWeight: FontWeight.w600)),
-          ],
-          const SizedBox(height: 18),
+              if (erreur) ...[
+                const SizedBox(height: 8),
+                const Text('❌  Numéro non reconnu. Réessayez.',
+                    style: TextStyle(color: _red, fontSize: 12, fontWeight: FontWeight.w600)),
+              ],
+              const SizedBox(height: 20),
 
-          SizedBox(width: double.infinity, height: 50,
-            child: ElevatedButton(
-              onPressed: () async {
-                // Vérifier le numéro en DB
-                final commercant = await _db.chargerCommercant();
-                if (commercant == null) return;
-                if (telCtrl.text.trim() == commercant['telephone']) {
-                  Navigator.pop(context);
-                  _ouvrirResetPin();
-                } else {
-                  setBS(() => erreur = true);
-                }
-              },
-              style: ElevatedButton.styleFrom(backgroundColor: _green,
-                foregroundColor: Colors.white, elevation: 0,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
-              child: const Text('Vérifier',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)))),
-          const SizedBox(height: 8),
-        ]))));
+              SizedBox(width: double.infinity, height: 54,
+                child: ElevatedButton(
+                  onPressed: () async {
+                    final commercant = await _db.chargerCommercant();
+                    if (commercant == null) return;
+                    if (telCtrl.text.trim() == commercant['telephone']) {
+                      Navigator.pop(context);
+                      _sheetNouveauPin();
+                    } else {
+                      setBS(() => erreur = true);
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _waveBlue, foregroundColor: Colors.white,
+                    elevation: 0, shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14))),
+                  child: const Text('Vérifier',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)))),
+            ]),
+          ),
+        ),
+      ),
+    );
   }
 
-  // ── Réinitialiser PIN : écriture en DB
-  void _ouvrirResetPin() {
-    final pinCtrl     = TextEditingController();
-    final confirmCtrl = TextEditingController();
-    bool obsPin = true, obsConfirm = true, loading = false;
+  // ── Saisir nouveau PIN
+  void _sheetNouveauPin() {
+    final pinCtrl  = TextEditingController();
+    final confCtrl = TextEditingController();
+    bool obs1 = true, obs2 = true, loading = false;
 
     showModalBottomSheet(
       context: context, isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => StatefulBuilder(builder: (ctx, setBS) => Container(
-        margin: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
-        decoration: const BoxDecoration(color: Colors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-        padding: const EdgeInsets.all(24),
-        child: Column(mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Center(child: Container(width: 40, height: 4,
-            decoration: BoxDecoration(color: const Color(0xFFD1D5DB),
-                borderRadius: BorderRadius.circular(2)))),
-          const SizedBox(height: 20),
-          const Text('Nouveau code PIN',
-              style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800, color: _text)),
-          const SizedBox(height: 18),
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setBS) => Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+          child: Container(
+            decoration: const BoxDecoration(color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+            padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+            child: Column(mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Center(child: Container(width: 40, height: 4,
+                margin: const EdgeInsets.only(bottom: 20),
+                decoration: BoxDecoration(color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(2)))),
 
-          _resetField(pinCtrl, 'Nouveau PIN', obsPin, () => setBS(() => obsPin = !obsPin)),
-          const SizedBox(height: 12),
-          _resetField(confirmCtrl, 'Confirmer le PIN', obsConfirm, () => setBS(() => obsConfirm = !obsConfirm)),
-          const SizedBox(height: 18),
+              const Text('Nouveau code PIN',
+                  style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 18),
 
-          SizedBox(width: double.infinity, height: 50,
-            child: ElevatedButton(
-              onPressed: loading ? null : () async {
-                if (pinCtrl.text.length != 4) return;
-                if (pinCtrl.text != confirmCtrl.text) return;
-                setBS(() => loading = true);
-                // Mettre à jour le PIN en DB (hashé automatiquement)
-                await _db.mettreAJourPin(widget.commercantId, pinCtrl.text);
-                setBS(() => loading = false);
-                if (!mounted) return;
-                Navigator.pop(context);
-                _toast('✅ Code PIN mis à jour !');
-              },
-              style: ElevatedButton.styleFrom(backgroundColor: _green,
-                foregroundColor: Colors.white, elevation: 0,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
-              child: loading
-                ? const SizedBox(width: 20, height: 20,
-                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5))
-                : const Text('Enregistrer',
-                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)))),
-          const SizedBox(height: 8),
-        ]))));
+              _pinField(pinCtrl,  'Nouveau PIN (4 chiffres)', obs1,
+                  () => setBS(() => obs1 = !obs1)),
+              const SizedBox(height: 12),
+              _pinField(confCtrl, 'Confirmer le PIN', obs2,
+                  () => setBS(() => obs2 = !obs2)),
+              const SizedBox(height: 20),
+
+              SizedBox(width: double.infinity, height: 54,
+                child: ElevatedButton(
+                  onPressed: loading ? null : () async {
+                    if (pinCtrl.text.length != 4 || pinCtrl.text != confCtrl.text) return;
+                    setBS(() => loading = true);
+                    await _db.mettreAJourPin(widget.commercantId, pinCtrl.text);
+                    setState(() => _erreurs = 0);
+                    setBS(() => loading = false);
+                    if (!mounted) return;
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                      content: Text('✅  Code PIN mis à jour !'),
+                      backgroundColor: _green,
+                      behavior: SnackBarBehavior.floating));
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _waveBlue, foregroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
+                  child: loading
+                    ? const SizedBox(width: 22, height: 22,
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5))
+                    : const Text('Enregistrer',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)))),
+            ]),
+          ),
+        ),
+      ),
+    );
   }
 
-  Widget _resetField(TextEditingController ctrl, String label, bool obs, VoidCallback toggle) =>
+  Widget _pinField(TextEditingController ctrl, String hint, bool obs, VoidCallback toggle) =>
     TextField(controller: ctrl, obscureText: obs,
       keyboardType: TextInputType.number, maxLength: 4,
-      style: const TextStyle(fontSize: 15, color: _text),
-      decoration: InputDecoration(counterText: '',
-        labelText: label, labelStyle: const TextStyle(color: _textMuted, fontSize: 13),
-        prefixIcon: const Icon(Icons.lock_outline_rounded, color: _textMuted, size: 20),
+      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+      style: const TextStyle(fontSize: 16),
+      decoration: InputDecoration(counterText: '', hintText: hint,
+        hintStyle: const TextStyle(color: Color(0xFFBDBDBD), fontSize: 14),
+        prefixIcon: const Icon(Icons.lock_outline_rounded, color: Color(0xFFBDBDBD), size: 20),
         suffixIcon: IconButton(
           icon: Icon(obs ? Icons.visibility_off_outlined : Icons.visibility_outlined,
-            color: _textMuted, size: 20), onPressed: toggle),
-        filled: true, fillColor: _grey,
+            color: const Color(0xFFBDBDBD), size: 20), onPressed: toggle),
+        filled: true, fillColor: const Color(0xFFF5F5F5),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
         focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: _green, width: 1.5)),
+          borderSide: const BorderSide(color: _waveBlue, width: 1.5)),
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14)));
 
   // ══════════════════════════════════════
-  //  BUILD
+  //  BUILD — Layout style Wave
   // ══════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      body: SafeArea(child: Column(children: [
-        const SizedBox(height: 36),
+      body: SafeArea(
+        child: Column(
+          children: [
 
-        // Logo
-        Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Container(width: 40, height: 40,
-            decoration: BoxDecoration(color: _green, borderRadius: BorderRadius.circular(11)),
-            child: const Icon(Icons.storefront_rounded, color: Colors.white, size: 22)),
-          const SizedBox(width: 10),
-          const Text('Le Commerçant', style: TextStyle(
-              color: _green, fontSize: 20, fontWeight: FontWeight.w800)),
-        ]),
+            // ── Espace haut flexible (comme Wave)
+            const Spacer(flex: 2),
 
-        const SizedBox(height: 32),
+            // ── LOGO (remplacez _buildLogo() par votre logo)
+            _buildLogo(),
 
-        // Avatar
-        Container(width: 70, height: 70,
-          decoration: BoxDecoration(color: _amberMid, shape: BoxShape.circle,
-              border: Border.all(color: _greenLight, width: 3)),
-          child: Center(child: Text(_initiales,
-              style: const TextStyle(color: Color(0xFF633806), fontSize: 24, fontWeight: FontWeight.w800)))),
-        const SizedBox(height: 10),
-        Text('Bonjour, ${widget.nomCommercant}',
-            style: const TextStyle(color: _text, fontSize: 17, fontWeight: FontWeight.w800)),
-        Text(widget.nomBoutique,
-            style: const TextStyle(color: _textMuted, fontSize: 13)),
-        const SizedBox(height: 6),
-        const Text('Entrez votre code PIN',
-            style: TextStyle(color: _textMuted, fontSize: 14)),
+            // ── Espace entre logo et points
+            const Spacer(flex: 2),
 
-        const SizedBox(height: 28),
+            // ── Points PIN avec animation secousse
+            AnimatedBuilder(
+              animation: _shakeAnim,
+              builder: (_, child) => Transform.translate(
+                offset: Offset(_shaking ? _shakeAnim.value : 0, 0),
+                child: child),
+              child: _buildDots(),
+            ),
 
-        // Points PIN avec animation secousse
-        AnimatedBuilder(
-          animation: _shakeAnim,
-          builder: (_, child) => Transform.translate(
-            offset: Offset(_secoue
-                ? 10 * (0.5 - (_shakeAnim.value - 0.5).abs()) * 2 : 0, 0),
-            child: child),
-          child: Row(mainAxisAlignment: MainAxisAlignment.center,
-            children: List.generate(_pinLength, (i) => AnimatedContainer(
+            // ── Message erreur (visible seulement si erreurs)
+            AnimatedSize(
               duration: const Duration(milliseconds: 200),
-              margin: const EdgeInsets.symmetric(horizontal: 10),
-              width: 16, height: 16,
-              decoration: BoxDecoration(shape: BoxShape.circle,
-                color: _secoue ? _red : i < _pin.length ? _greenDot : _greenEmpty,
-                border: i < _pin.length ? null
-                    : Border.all(color: _greyMid, width: 1.5))))),
+              child: _erreurs > 0
+                ? Padding(
+                    padding: const EdgeInsets.only(top: 14),
+                    child: Text(
+                      _erreurs >= _maxTentatives - 1
+                          ? '⚠️  Dernière tentative'
+                          : 'Code incorrect · $_erreurs/${_maxTentatives}',
+                      style: const TextStyle(
+                          color: _red, fontSize: 13, fontWeight: FontWeight.w600)))
+                : const SizedBox(height: 0)),
+
+            // ── Espace entre points et clavier
+            const Spacer(flex: 2),
+
+            // ── CLAVIER NUMÉRIQUE
+            _buildKeyboard(),
+
+            // ── Lien "Oublié votre code secret ?"
+            const SizedBox(height: 24),
+            GestureDetector(
+              onTap: _sheetOubliPin,
+              child: const Text(
+                'Oublié votre code secret?',
+                style: TextStyle(
+                  color: _waveBlue,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 32),
+          ],
         ),
-
-        // Message d'erreur
-        AnimatedOpacity(
-          opacity: _erreurs > 0 ? 1 : 0,
-          duration: const Duration(milliseconds: 300),
-          child: Padding(
-            padding: const EdgeInsets.only(top: 12),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-              decoration: BoxDecoration(color: _redLight, borderRadius: BorderRadius.circular(20)),
-              child: Text(
-                _erreurs >= _maxTentatives - 1
-                    ? '⚠️  Dernière tentative avant blocage'
-                    : 'Code incorrect · $_erreurs essai${_erreurs > 1 ? 's' : ''}',
-                style: const TextStyle(color: _red, fontSize: 12, fontWeight: FontWeight.w700))))),
-
-        const SizedBox(height: 28),
-
-        // Clavier numérique
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 48),
-          child: Column(children: [
-            _ligne(['1','2','3']),
-            const SizedBox(height: 10),
-            _ligne(['4','5','6']),
-            const SizedBox(height: 10),
-            _ligne(['7','8','9']),
-            const SizedBox(height: 10),
-            Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-              const SizedBox(width: 78, height: 78),
-              _touche('0'),
-              _toucheEffacer(),
-            ]),
-          ])),
-
-        const Spacer(),
-
-        // Lien PIN oublié
-        GestureDetector(
-          onTap: _ouvrirOubliPin,
-          child: const Padding(
-            padding: EdgeInsets.only(bottom: 32),
-            child: Text('Oublié votre code PIN ?', style: TextStyle(
-              color: _green, fontSize: 14, fontWeight: FontWeight.w700,
-              decoration: TextDecoration.underline, decorationColor: _green)))),
-      ])),
+      ),
     );
   }
 
-  Widget _ligne(List<String> keys) => Row(
+  // ══════════════════════════════════════
+  //  LOGO — Remplacez ce widget par votre propre logo
+  // ══════════════════════════════════════
+  Widget _buildLogo() {
+    return Column(children: [
+      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      // OPTION 1 — Logo depuis les assets (recommandé)
+      // Décommentez et adaptez le chemin :
+      //
+      // Image.asset(
+      //   'assets/images/logo.png',
+      //   width: 120,
+      //   height: 120,
+      //   fit: BoxFit.contain,
+      // ),
+      //
+      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      // OPTION 2 — Icône avec nom (par défaut tant que le logo n'est pas ajouté)
+      Container(
+        width: 110,
+        height: 110,
+        decoration: BoxDecoration(
+          color: const Color(0xFFE1F5EE),
+          borderRadius: BorderRadius.circular(28),
+        ),
+        child: const Center(
+          child: Icon(Icons.storefront_rounded,
+              color: Color(0xFF0F6E56), size: 58)),
+      ),
+      const SizedBox(height: 14),
+      const Text(
+        'Le Commerçant',
+        style: TextStyle(
+          color: Color(0xFF0F6E56),
+          fontSize: 18,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 0.3,
+        ),
+      ),
+      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ]);
+  }
+
+  // ══════════════════════════════════════
+  //  POINTS PIN — style Wave (bleu clair)
+  // ══════════════════════════════════════
+  Widget _buildDots() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: List.generate(_pinLength, (i) {
+        final filled = i < _pin.length;
+        final isLast = i == _pin.length - 1 && filled;
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          curve: Curves.easeOut,
+          margin: const EdgeInsets.symmetric(horizontal: 14),
+          width: filled ? 16 : 14,
+          height: filled ? 16 : 14,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: _shaking
+                ? _red
+                : filled
+                    ? _waveBlueFill
+                    : _waveBlueEmpty,
+          ),
+        );
+      }),
+    );
+  }
+
+  // ══════════════════════════════════════
+  //  CLAVIER — style Wave (grand, espacé)
+  // ══════════════════════════════════════
+  Widget _buildKeyboard() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Column(children: [
+        _keyRow(['1', '2', '3']),
+        const SizedBox(height: 4),
+        _keyRow(['4', '5', '6']),
+        const SizedBox(height: 4),
+        _keyRow(['7', '8', '9']),
+        const SizedBox(height: 4),
+        _bottomRow(),
+      ]),
+    );
+  }
+
+  Widget _keyRow(List<String> keys) => Row(
     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-    children: keys.map(_touche).toList());
+    children: keys.map(_buildKey).toList());
 
-  Widget _touche(String val) => GestureDetector(
-    onTap: () => _onTouche(val),
-    child: Container(width: 78, height: 78,
-      decoration: const BoxDecoration(color: _grey, shape: BoxShape.circle),
-      child: Center(child: Text(val, style: const TextStyle(
-          fontSize: 26, fontWeight: FontWeight.w500, color: _text)))));
+  Widget _bottomRow() => Row(
+    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+    children: [
+      // Espace vide à gauche (comme Wave)
+      const SizedBox(width: 88, height: 88),
+      _buildKey('0'),
+      _buildDeleteKey(),
+    ]);
 
-  Widget _toucheEffacer() => GestureDetector(
-    onTap: _effacer,
-    child: Container(width: 78, height: 78,
-      child: const Center(child: Icon(Icons.backspace_outlined, size: 26, color: _textMuted))));
+  Widget _buildKey(String val) {
+    return GestureDetector(
+      onTap: () => _onKey(val),
+      behavior: HitTestBehavior.opaque,
+      child: SizedBox(
+        width: 88,
+        height: 88,
+        child: Center(
+          child: Text(
+            val,
+            style: const TextStyle(
+              fontSize: 30,
+              fontWeight: FontWeight.w400,
+              color: _keyColor,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
-  void _toast(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg), backgroundColor: _green,
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      margin: const EdgeInsets.all(16)));
+  Widget _buildDeleteKey() {
+    return GestureDetector(
+      onTap: _onDelete,
+      onLongPress: () => setState(() => _pin = ''), // Maintenir = tout effacer
+      behavior: HitTestBehavior.opaque,
+      child: SizedBox(
+        width: 88,
+        height: 88,
+        child: Center(
+          child: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF5F5F5),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(Icons.backspace_outlined,
+                size: 26, color: _deleteColor),
+          ),
+        ),
+      ),
+    );
   }
 }

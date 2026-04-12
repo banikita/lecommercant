@@ -1237,10 +1237,10 @@ class _StockPageState extends State<StockPage> {
       'Autre':       'lib/assets/categories/autre.jpg',
     };
     final emojis = {
-      'Alimentaire': '🍚',
-      'Boissons':    '🥤',
-      'Hygiène':     '🧼',
-      'Autre':       '📦',
+      'Alimentaire': '',
+      'Boissons':    '',
+      'Hygiène':     '',
+      'Autre':       '',
     };
     final path = paths[category];
     if (path == null) {
