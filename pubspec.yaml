@@ -23,6 +23,8 @@ dependencies:
   crypto: ^3.0.3           # SHA-256 pour hasher le PIN
   intl: ^0.18.1
   uuid: ^4.3.3
+  url_launcher: ^6.3.0
+  image_picker: ^1.0.0
   
 
 dev_dependencies:

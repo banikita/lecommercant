@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:le_commercant/database/app_database.dart';
 import 'dashbord.dart'; 
+import 'package:flutter/foundation.dart';
 
 class RegisterPage extends StatefulWidget {
   const RegisterPage({super.key});
@@ -147,76 +148,78 @@ class _RegisterPageState extends State<RegisterPage>
 
   // --- ACTION PRINCIPALE CORRIGÉE ---
   Future<void> _inscrire() async {
-    setState(() => _isLoading = true);
+  setState(() => _isLoading = true);
 
-    try {
-      final prenom = _prenomCtrl.text.trim();
-      final nom = _nomCtrl.text.trim();
-      final tel = _telephoneCtrl.text.trim();
-      final boutique = _boutiqueCtrl.text.trim();
-      final ville = _villeCtrl.text.trim();
-      final pinSaisi = _pinCtrl.text;
+  try {
+    final prenom = _prenomCtrl.text.trim();
+    final nom = _nomCtrl.text.trim();
+    final tel = _telephoneCtrl.text.trim();
+    final boutique = _boutiqueCtrl.text.trim();
+    final ville = _villeCtrl.text.trim();
+    final pinSaisi = _pinCtrl.text;
 
-      // 1. Hacher le PIN (Indispensable pour la sécurité et la connexion future)
-      // Assure-toi que la méthode hashPin est publique dans AppDatabase.dart
-      final String pinHashe = _db.hashPin(pinSaisi);
+    // 1. Hash du PIN
+    final String pinHashe = _db.hashPin(pinSaisi);
 
-      // 2. Enregistrement sur Supabase
-      final supabase = Supabase.instance.client;
-      final response = await supabase.from('commercants').insert({
-        'prenom': prenom,
-        'nom': nom,
-        'telephone': tel,
-        'nom_boutique': boutique,
-        'ville': ville,
-        'pin_hash': pinHashe, // On enregistre le hash ici !
-      }).select().single();
+    // 2. Supabase (OK sur Web)
+    final supabase = Supabase.instance.client;
+    final response = await supabase.from('commercants').insert({
+      'prenom': prenom,
+      'nom': nom,
+      'telephone': tel,
+      'nom_boutique': boutique,
+      'ville': ville,
+      'pin_hash': pinHashe,
+    }).select().single();
 
-      final int supabaseId = response['id'];
+    final int supabaseId = response['id'];
 
-      // 3. Enregistrement en local (SQLite)
-      // On passe le PIN original car inscrire() dans AppDatabase fait son propre hash
+    // ✅ 3. SQLite UNIQUEMENT hors Web
+    if (!kIsWeb) {
       await _db.inscrire(
         prenom: prenom,
         nom: nom,
         telephone: tel,
         nomBoutique: boutique,
         ville: ville,
-        pin: pinSaisi, 
+        pin: pinSaisi,
       );
-
-      // 4. SharedPreferences
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('is_registered', true);
-      await prefs.setBool('is_logged_in', true);
-      await prefs.setInt('commercant_id', supabaseId);
-      await prefs.setString('nom_commercant', '$prenom $nom');
-      await prefs.setString('nom_boutique', boutique);
-      await prefs.setString('ville', ville);
 
       await _db.ouvrirSession(supabaseId);
-
-      if (!mounted) return;
-
-      // 5. Navigation
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (_) => DashboardPage(
-            commercantId: supabaseId,
-            nomCommercant: '$prenom $nom',
-            nomBoutique: boutique,
-            ville: ville,
-          ),
-        ),
-      );
-    } catch (e) {
-      setState(() => _isLoading = false);
-      _toast('Erreur lors de l\'inscription. Vérifiez votre connexion.', err: true);
-      debugPrint("Erreur Supabase: $e");
     }
-  }
 
+    // 4. SharedPreferences (OK sur Web)
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('is_registered', true);
+    await prefs.setBool('is_logged_in', true);
+    await prefs.setInt('commercant_id', supabaseId);
+    await prefs.setString('nom_commercant', '$prenom $nom');
+    await prefs.setString('nom_boutique', boutique);
+    await prefs.setString('ville', ville);
+
+    if (!mounted) return;
+
+    // 5. Navigation
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (_) => DashboardPage(
+          commercantId: supabaseId,
+          nomCommercant: '$prenom $nom',
+          nomBoutique: boutique,
+          ville: ville,
+        ),
+      ),
+    );
+  } catch (e) {
+    setState(() => _isLoading = false);
+
+    // 👇 affiche la vraie erreur (important pour debug)
+    debugPrint("ERREUR INSCRIPTION: $e");
+
+    _toast('Erreur lors de l\'inscription.', err: true);
+  }
+}
   @override
   Widget build(BuildContext context) {
     return Scaffold(
