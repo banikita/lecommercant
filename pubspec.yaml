@@ -9,20 +9,24 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  mobile_scanner: ^3.5.6
-
+  
+  geolocator: ^11.0.0
+  flutter_secure_storage: ^9.0.0 
+  mobile_scanner: ^5.0.0
+  sqflite_common_ffi: ^2.3.0
+  sqflite_common_ffi_web: ^1.1.1
   # ── Persistance & Base de données (Locale et Cloud)
   shared_preferences: ^2.2.2
   sqflite: ^2.4.2
   path: ^1.9.0
-  supabase_flutter: ^2.3.0
-
+  supabase_flutter: ^2.0.0
+  image_picker: ^1.0.7
+  cached_network_image: ^3.3.1
+  cupertino_icons: ^1.0.8
   # ── Sécurité & Utilitaires
   crypto: ^3.0.3           # SHA-256 pour hasher le PIN
   intl: ^0.18.1
   uuid: ^4.3.3
-  sqflite_common_ffi_web: ^1.1.1
-  
 
 dev_dependencies:
   flutter_test:

@@ -1,16 +1,50 @@
-# lecommercant
+# sqflite_common_ffi_web
 
-A new Flutter project.
+sqlite Web implementation (experimental)
+sqlite Web implementation (experimental). Features:
+- Persistency (in indexeddb)
+- Cross-tab safe (runs in web worker)
 
-## Getting Started
+Thanks Simon Binder for the excellent sqlite3 lib.
 
-This project is a starting point for a Flutter application.
+## Setup
 
-A few resources to get you started if this is your first Flutter project:
+Add the dependency:
+```yaml
+  dependencies:
+    sqflite_common_ffi_web: '>=0.1.0-dev.1'
+```
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+### Setup binaries
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Implementation requires sqlite3.wasm binaries into your web folder
+as well as a sqflite specific service worker.
+
+You can install binaries using the command:
+
+```bash
+$ dart run sqflite_common_ffi_web:setup
+```
+
+It should create the following files in your web folder:
+- `sqflite3.wasm`
+- `sqflite_sw.js`
+
+that you can put in source control or not (personally I don't)
+
+### Use the proper factory.
+
+```dart
+// Use the ffi web factory in web apps (flutter or dart)
+var factory = databaseFactoryFfiWeb;
+var db = await factory.openDatabase(inMemoryDatabasePath);
+var sqliteVersion = (await db.rawQuery('select sqlite_version()')).first.values.first;
+print(sqliteVersion); // should print 3.39.3
+```
+
+## Status
+
+This is still experimental:
+- slow
+- not fully tested
+- bugs
