@@ -3,13 +3,19 @@ import 'package:path/path.dart';
 import 'package:crypto/crypto.dart';
 import 'dart:convert';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class AppDatabase {
   static final AppDatabase instance = AppDatabase._init();
   static Database? _db;
   final supabase = Supabase.instance.client;
+  static late SharedPreferences _prefs;
 
   AppDatabase._init();
+
+  static Future<void> init() async {
+    _prefs = await SharedPreferences.getInstance();
+  }
 
   Future<Database> get database async {
     if (_db != null) return _db!;
@@ -19,13 +25,22 @@ class AppDatabase {
 
   Future<Database> _initDB() async {
     final path = join(await getDatabasesPath(), 'lecommercant.db');
-    return openDatabase(path, version: 1, onCreate: _creerTables);
+    return openDatabase(
+      path,
+      version: 1,
+      onCreate: _creerTables,
+      // ✅ CORRECTION : garantit que les tables existent même si onCreate a échoué
+      onOpen: (db) async {
+        await _creerTables(db, 1).catchError((_) {});
+      },
+    );
   }
 
+  // ✅ CORRECTION : utilisation de IF NOT EXISTS pour éviter les erreurs
   Future<void> _creerTables(Database db, int version) async {
     await db.execute('''
-      CREATE TABLE commercants (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+      CREATE TABLE IF NOT EXISTS commercants (
+        id INTEGER PRIMARY KEY,
         prenom TEXT NOT NULL,
         nom TEXT NOT NULL,
         telephone TEXT NOT NULL UNIQUE,
@@ -36,43 +51,42 @@ class AppDatabase {
       )
     ''');
     await db.execute('''
-      CREATE TABLE sessions (
+      CREATE TABLE IF NOT EXISTS sessions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        commercant_id INTEGER NOT NULL REFERENCES commercants(id),
+        commercant_id INTEGER NOT NULL REFERENCES commercants(id) ON DELETE CASCADE,
         token TEXT NOT NULL,
         is_active INTEGER NOT NULL DEFAULT 1,
         tentatives_pin INTEGER NOT NULL DEFAULT 0,
         derniere_activite TEXT NOT NULL DEFAULT (datetime('now'))
       )
     ''');
-    await db.execute('''
-      CREATE TABLE transactions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        commercant_id INTEGER NOT NULL REFERENCES commercants(id),
-        nom_client TEXT NOT NULL,
-        type TEXT NOT NULL,
-        montant REAL NOT NULL,
-        date TEXT NOT NULL DEFAULT (datetime('now'))
-      )
-    ''');
   }
 
-  // ── INSCRIPTION ──────────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  // GESTION DES COMMERÇANTS (LOCAL SQLite)
+  // ═══════════════════════════════════════════════════════════════════════════
+
   Future<int?> inscrire({
-    required String prenom, required String nom,
-    required String telephone, required String nomBoutique,
-    required String ville, required String pin,
+    required String prenom,
+    required String nom,
+    required String telephone,
+    required String nomBoutique,
+    required String ville,
+    required String pin,
   }) async {
     final db = await database;
     final exist = await db.query('commercants', where: 'telephone = ?', whereArgs: [telephone]);
     if (exist.isNotEmpty) return null;
     return await db.insert('commercants', {
-      'prenom': prenom, 'nom': nom, 'telephone': telephone,
-      'nom_boutique': nomBoutique, 'ville': ville, 'pin_hash': hashPin(pin),
+      'prenom': prenom,
+      'nom': nom,
+      'telephone': telephone,
+      'nom_boutique': nomBoutique,
+      'ville': ville,
+      'pin_hash': hashPin(pin, telephone),
     });
   }
 
-  // ── CONNEXION & PIN ───────────────────────────────────────────────────────
   Future<Map<String, dynamic>?> chargerCommercant() async {
     final db = await database;
     final rows = await db.query('commercants', limit: 1);
@@ -83,16 +97,42 @@ class AppDatabase {
     final db = await database;
     final rows = await db.query('commercants', where: 'id = ?', whereArgs: [commercantId]);
     if (rows.isEmpty) return false;
-    return rows.first['pin_hash'] == hashPin(pin);
+    final user = rows.first;
+    return user['pin_hash'] == hashPin(pin, user['telephone']);
   }
 
   Future<void> mettreAJourPin(int id, String nouveauPin) async {
     final db = await database;
-    await db.update('commercants', {'pin_hash': hashPin(nouveauPin)}, where: 'id = ?', whereArgs: [id]);
+    final user = await db.query('commercants', where: 'id = ?', whereArgs: [id]);
+    if (user.isEmpty) return;
+
+    final telephone = user.first['telephone'] as String;
+    final nouveauHash = hashPin(nouveauPin, telephone);
+
+    // 1. SQLite local
+    await db.update(
+      'commercants',
+      {'pin_hash': nouveauHash},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+
+    // 2. Synchronisation Supabase
+    try {
+      await supabase
+          .from('commercants')
+          .update({'pin_hash': nouveauHash})
+          .eq('id', id);
+    } catch (e) {
+      print("Erreur synchro Supabase du PIN : $e");
+    }
     await reinitialiserTentatives(id);
   }
 
-  // ── SESSIONS ──────────────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SESSIONS
+  // ═══════════════════════════════════════════════════════════════════════════
+
   Future<int> incrementerTentatives(int id) async {
     final db = await database;
     final res = await db.rawQuery('SELECT tentatives_pin FROM sessions WHERE commercant_id = ?', [id]);
@@ -117,42 +157,28 @@ class AppDatabase {
     await db.update('sessions', {'is_active': 0}, where: 'commercant_id = ?', whereArgs: [id]);
   }
 
-  // ── DASHBOARD : VENTES DU JOUR ────────────────────────────────────────────
-  // Lit depuis la table 'ventes' (ventes payées cash au comptant)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // DASHBOARD : CALCULS DEPUIS SUPABASE
+  // ═══════════════════════════════════════════════════════════════════════════
+
   Future<double> ventesAujourdhui(int id) async {
     try {
       final today = DateTime.now().toIso8601String().split('T')[0];
       final response = await supabase
           .from('ventes')
-          .select('montant_total')
+          .select('total_montant')
           .eq('commercant_id', id)
-          .gte('created_at', today);
-      double total = 0;
-      for (var row in response) {
-        total += (row['montant_total'] ?? 0).toDouble();
-      }
-      return total;
-    } catch (_) {
-      // Fallback : lit les dettes du jour si table ventes absente
-      try {
-        final today = DateTime.now().toIso8601String().split('T')[0];
-        final response = await supabase
-            .from('dettes')
-            .select('montant_initial')
-            .eq('commercant_id', id)
-            .gte('created_at', today);
-        double total = 0;
-        for (var row in response) {
-          total += (row['montant_initial'] ?? 0).toDouble();
-        }
-        return total;
-      } catch (e) {
-        return 0.0;
-      }
+          .gte('date_vente', today);
+      final List rows = response as List;
+      return rows.fold<double>(0.0, (double sum, row) {
+        final montant = row['total_montant'] ?? 0;
+        return sum + (montant as num).toDouble();
+      });
+    } catch (e) {
+      return 0.0;
     }
   }
 
-  // ── DASHBOARD : DETTES EN COURS ───────────────────────────────────────────
   Future<double> dettesEnCours(int id) async {
     try {
       final response = await supabase
@@ -162,9 +188,9 @@ class AppDatabase {
           .eq('statut', 'en_cours');
       double total = 0;
       for (var row in response) {
-        double ini = (row['montant_initial'] ?? 0).toDouble();
-        double rem = (row['montant_rembourse'] ?? 0).toDouble();
-        total += (ini - rem).clamp(0, double.infinity);
+        double reste = (row['montant_initial'] ?? 0).toDouble() -
+            (row['montant_rembourse'] ?? 0).toDouble();
+        total += reste > 0 ? reste : 0;
       }
       return total;
     } catch (e) {
@@ -172,133 +198,141 @@ class AppDatabase {
     }
   }
 
-  // ── DASHBOARD : TRANSACTIONS RÉCENTES ─────────────────────────────────────
-  // Fusionne 3 sources :
-  //   1. 'ventes'   → ventes payées comptant          (type: 'vente_cash')
-  //   2. 'dettes'   → crédits accordés                (type: 'credit')
-  //   3. 'paiements'→ remboursements partiels/totaux   (type: 'remboursement')
-  Future<List<Map<String, dynamic>>> chargerTransactionsRecentes(
-      int id, {int limite = 10}) async {
-    final List<Map<String, dynamic>> toutes = [];
-
-    // ── 1. Ventes payées comptant ──
+  Future<List<Map<String, dynamic>>> chargerTransactionsRecentes(int id,
+      {int limite = 15}) async {
     try {
-      final ventes = await supabase
-          .from('ventes')
-          .select('id, created_at, montant_total, produits_details, nom_client')
+      final response = await supabase
+          .from('v_transactions')
+          .select()
           .eq('commercant_id', id)
-          .order('created_at', ascending: false)
+          .order('date_vente', ascending: false)
           .limit(limite);
-      for (var v in ventes) {
-        toutes.add({
-          'type': 'vente_cash',
-          'label': v['nom_client'] ?? 'Client',
-          'produit': _extrairePremierProduit(v['produits_details']),
-          'produits_details': v['produits_details'] ?? '',
-          'montant': (v['montant_total'] ?? 0).toDouble(),
-          'created_at': v['created_at'] ?? '',
-          'statut': 'paye',
-          'image_categorie': _devinerCategorie(v['produits_details']),
-        });
-      }
-    } catch (_) {}
+      return List<Map<String, dynamic>>.from(response);
+    } catch (e) {
+      return [];
+    }
+  }
 
-    // ── 2. Crédits accordés (dettes) ──
+  // ═══════════════════════════════════════════════════════════════════════════
+  // NOTIFICATIONS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  Future<List<Map<String, dynamic>>> recupererNotifications(int id) async {
     try {
-      final dettes = await supabase
-          .from('dettes')
-          .select('id, created_at, montant_initial, montant_rembourse, produits_details, nom_debiteur, photo_url, statut')
+      final response = await supabase
+          .from('notifications')
+          .select()
           .eq('commercant_id', id)
-          .order('created_at', ascending: false)
-          .limit(limite);
-      for (var d in dettes) {
-        double ini = (d['montant_initial'] ?? 0).toDouble();
-        double rem = (d['montant_rembourse'] ?? 0).toDouble();
-        bool solde = rem >= ini;
-        toutes.add({
-          'type': 'credit',
-          'label': d['nom_debiteur'] ?? 'Client',
-          'produit': _extrairePremierProduit(d['produits_details']),
-          'produits_details': d['produits_details'] ?? '',
-          'montant': ini,
-          'montant_rembourse': rem,
-          'reste': (ini - rem).clamp(0, double.infinity),
-          'created_at': d['created_at'] ?? '',
-          'statut': solde ? 'paye' : 'impaye',
-          'photo_url': d['photo_url'],
-          'image_categorie': _devinerCategorie(d['produits_details']),
-        });
-      }
-    } catch (_) {}
+          .order('created_at', ascending: false);
+      return List<Map<String, dynamic>>.from(response);
+    } catch (e) {
+      print("Erreur chargement notifications: $e");
+      return [];
+    }
+  }
 
-    // ── 3. Paiements / remboursements partiels ──
-    try {
-      final paiements = await supabase
-          .from('paiements')
-          .select('id, created_at, montant, methode_paiement, dette_id')
-          .eq('commercant_id', id)
-          .order('created_at', ascending: false)
-          .limit(limite);
-      for (var p in paiements) {
-        toutes.add({
-          'type': 'remboursement',
-          'label': 'Remboursement',
-          'produit': 'Versement reçu',
-          'produits_details': p['methode_paiement'] ?? 'Cash',
-          'montant': (p['montant'] ?? 0).toDouble(),
-          'created_at': p['created_at'] ?? '',
-          'statut': 'paye',
-          'image_categorie': 'paiement',
-        });
-      }
-    } catch (_) {}
+  Future<void> marquerNotificationLue(int notificationId) async {
+    await supabase
+        .from('notifications')
+        .update({'est_lu': true}).eq('id', notificationId);
+  }
 
-    // Trie par date décroissante et limite
-    toutes.sort((a, b) {
-      try {
-        return DateTime.parse(b['created_at'])
-            .compareTo(DateTime.parse(a['created_at']));
-      } catch (_) {
-        return 0;
-      }
+  Future<void> toutMarquerLu(int commercantId) async {
+    await supabase
+        .from('notifications')
+        .update({'est_lu': true}).eq('commercant_id', commercantId);
+  }
+
+  Future<void> supprimerNotification(int notificationId) async {
+    await supabase.from('notifications').delete().eq('id', notificationId);
+  }
+
+  Future<void> ajouterNotification(
+      int commercantId, String titre, String message) async {
+    await supabase.from('notifications').insert({
+      'commercant_id': commercantId,
+      'titre': titre,
+      'message': message,
+      'est_lu': false,
+      'created_at': DateTime.now().toIso8601String(),
     });
-
-    return toutes.take(limite).toList();
   }
 
-  // ── HELPERS INTERNES ──────────────────────────────────────────────────────
-  String _extrairePremierProduit(dynamic details) {
-    if (details == null || details.toString().isEmpty) return 'Produit';
-    // Format possible: "2x Pain, 1x Sucre" ou "Pain, Sucre"
-    final str = details.toString();
-    final parts = str.split(',');
-    if (parts.isEmpty) return str;
-    final premier = parts.first.trim();
-    // Enlève le préfixe quantité "2x "
-    final regex = RegExp(r'^\d+x\s+');
-    return premier.replaceFirst(regex, '').trim();
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SÉCURITÉ & BIOMÉTRIE
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  String hashPin(String pin, dynamic salt) {
+    return sha256.convert(utf8.encode(pin + salt.toString())).toString();
   }
 
-  String _devinerCategorie(dynamic details) {
-    if (details == null) return 'Autre';
-    final str = details.toString().toLowerCase();
-    if (str.contains('pain') || str.contains('riz') || str.contains('aliment') ||
-        str.contains('farine') || str.contains('huile') || str.contains('sucre')) {
-      return 'Alimentaire';
+  static Map<String, dynamic> getBiometrie() {
+    final raw = _prefs.getString('biometrie');
+    if (raw == null) {
+      return {
+        'empreinte': false,
+        'reconnaissance': false,
+        'pin': true,
+        'pinValue': '1234',
+        'lastAuth': "Jamais",
+      };
     }
-    if (str.contains('eau') || str.contains('jus') || str.contains('boisson') ||
-        str.contains('lait') || str.contains('café')) {
-      return 'Boissons';
-    }
-    if (str.contains('savon') || str.contains('hygiène') || str.contains('detergen') ||
-        str.contains('lessive') || str.contains('shampooing')) {
-      return 'Hygiène';
-    }
-    return 'Autre';
+    return Map<String, dynamic>.from(jsonDecode(raw));
   }
 
-  // ── SÉCURITÉ ──────────────────────────────────────────────────────────────
-  String hashPin(String pin) {
-    return sha256.convert(utf8.encode(pin + "salt_123")).toString();
+  static Future<void> saveBiometrie(Map<String, dynamic> bio) async {
+    await _prefs.setString('biometrie', jsonEncode(bio));
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PARAMÈTRES
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  static const String _settingsKey = 'app_settings';
+
+  static Map<String, dynamic> getSettings() {
+    final raw = _prefs.getString(_settingsKey);
+    if (raw == null) {
+      return {
+        'langue': 'Français',
+        'devise': 'XOF (F CFA)',
+        'notifications': true,
+        'sons': true,
+        'vibration': true,
+        'syncAuto': true,
+      };
+    }
+    return Map<String, dynamic>.from(jsonDecode(raw));
+  }
+
+  static Future<void> saveSettings(Map<String, dynamic> settings) async {
+    await _prefs.setString(_settingsKey, jsonEncode(settings));
+  }
+
+  Future<void> synchroniserPinDepuisSupabase(int id) async {
+    final response = await supabase
+        .from('commercants')
+        .select('pin_hash')
+        .eq('id', id)
+        .single();
+    final remoteHash = response['pin_hash'] as String?;
+    if (remoteHash != null) {
+      final db = await database;
+      await db.update(
+        'commercants',
+        {'pin_hash': remoteHash},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    }
+  }
+
+  Future<void> sauvegarderCommercantLocal(Map<String, dynamic> donnees) async {
+    final db = await database;
+    await db.insert(
+      'commercants',
+      donnees,
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
   }
 }

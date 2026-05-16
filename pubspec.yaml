@@ -4,33 +4,53 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
+  sdk: '>=3.3.0 <4.0.0'
 
 dependencies:
   flutter:
     sdk: flutter
-  mobile_scanner: ^5.2.1
 
-  sqflite_common_ffi: ^2.3.0
-  sqflite_common_ffi_web: ^0.4.0
-  # ── Persistance & Base de données (Locale et Cloud)
-  shared_preferences: ^2.2.2
-  sqflite: ^2.4.2
+  # ── Base de données ──────────────────────────────────────────────────────
+  sqflite: ^2.3.3+1
+  sqflite_common_ffi: ^2.3.4          # Desktop (Windows / Linux / macOS)
+  sqflite_common_ffi_web: ^0.4.5+2  # Web   # Web  ← résout l'erreur sqflite_sw.js
   path: ^1.9.0
-  supabase_flutter: ^2.3.0
 
-  # ── Sécurité & Utilitaires
-  crypto: ^3.0.3           # SHA-256 pour hasher le PIN
-  intl: ^0.18.1
-  uuid: ^4.3.3
+  # ── Cloud ────────────────────────────────────────────────────────────────
+  supabase_flutter: ^2.5.6
+
+  # ── Stockage local ───────────────────────────────────────────────────────
+  shared_preferences: ^2.3.2
+
+  # ── Sécurité ─────────────────────────────────────────────────────────────
+  crypto: ^3.0.3
+  local_auth: ^2.3.0
+
+  # ── Scanner code-barres ──────────────────────────────────────────────────
+  mobile_scanner: ^5.2.3
+
+  # ── Utilitaires ──────────────────────────────────────────────────────────
+  intl: ^0.19.0
+  uuid: ^4.4.0
   url_launcher: ^6.3.0
-  image_picker: ^1.0.0
-  
-
+  image_picker: ^1.1.2
+  cupertino_icons: ^1.0.8
+  cached_network_image: ^3.4.1
+  app_settings: ^5.1.1
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^3.0.0
+  flutter_lints: ^4.0.0
 
 flutter:
   uses-material-design: true
+
+ 
+
+
+
+  assets:
+    - assets/categories/
+    - assets/images/
+    - assets/images/dashboard/
+    

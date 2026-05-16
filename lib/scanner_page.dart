@@ -2,16 +2,25 @@ import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 class ScannerPage extends StatefulWidget {
-  const ScannerPage({super.key});
+  // AJOUT : On déclare le paramètre onScanned
+  final Function(String)? onScanned;
+
+  // AJOUT : On l'ajoute au constructeur
+  const ScannerPage({super.key, this.onScanned});
 
   @override
   State<ScannerPage> createState() => _ScannerPageState();
 }
 
 class _ScannerPageState extends State<ScannerPage> {
-  // Contrôleur pour gérer la caméra
-  MobileScannerController cameraController = MobileScannerController();
+  final MobileScannerController cameraController = MobileScannerController();
   bool isScanCompleted = false;
+
+  @override
+  void dispose() {
+    cameraController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -20,21 +29,18 @@ class _ScannerPageState extends State<ScannerPage> {
         title: const Text("Scanner le produit"),
         backgroundColor: const Color(0xFF0F6E56),
         actions: [
-          // Bouton pour allumer le flash
-       IconButton(
-  color: Colors.white,
-  icon: ValueListenableBuilder(
-    valueListenable: cameraController, // On écoute directement le contrôleur
-    builder: (context, state, child) {
-      // On vérifie si le flash est allumé ou éteint via le contrôleur
-      return Icon(
-        cameraController.torchEnabled ? Icons.flash_on : Icons.flash_off,
-        color: cameraController.torchEnabled ? Colors.yellow : Colors.grey,
-      );
-    },
-  ),
-  onPressed: () => cameraController.toggleTorch(),
-),
+          IconButton(
+            icon: ValueListenableBuilder(
+              valueListenable: cameraController,
+              builder: (context, state, child) {
+                return Icon(
+                  cameraController.torchEnabled ? Icons.flash_on : Icons.flash_off,
+                  color: cameraController.torchEnabled ? Colors.yellow : Colors.white,
+                );
+              },
+            ),
+            onPressed: () => cameraController.toggleTorch(),
+          ),
         ],
       ),
       body: MobileScanner(
@@ -42,12 +48,18 @@ class _ScannerPageState extends State<ScannerPage> {
         onDetect: (capture) {
           if (!isScanCompleted) {
             final List<Barcode> barcodes = capture.barcodes;
+
             if (barcodes.isNotEmpty) {
-              isScanCompleted = true;
               final String code = barcodes.first.rawValue ?? "Inconnu";
-              
-              // On ferme le scanner et on renvoie le code à la page Ventes
-              Navigator.pop(context, code);
+              isScanCompleted = true;
+
+              // CORRECTION : On vérifie si onScanned a été fourni
+              if (widget.onScanned != null) {
+                widget.onScanned!(code);
+              } else {
+                // Comportement par défaut si aucun callback n'est passé
+                Navigator.pop(context, code);
+              }
             }
           }
         },

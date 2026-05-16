@@ -1,22 +1,54 @@
+import 'dart:io';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 
-final supabase = Supabase.instance.client;
+final _sb = Supabase.instance.client;
 
-// ─────────────────────────────────────────
-// MODÈLE PRODUIT
-// ─────────────────────────────────────────
+class _S {
+  static const emerald = Color(0xFF0A5C47);
+  static const emeraldMid = Color(0xFF0D7A5F);
+  static const emeraldFaint = Color(0xFFE8F5F0);
+  static const emeraldGlow = Color(0xFF1DC58A);
+  static const gold = Color(0xFFD4940A);
+  static const goldLight = Color(0xFFFFF0C2);
+  static const coral = Color(0xFFCC3B3B);
+  static const coralLight = Color(0xFFFFF0F0);
+  static const orange = Color(0xFFE8720C);
+  static const orangeLight = Color(0xFFFFF3EB);
+  static const ink = Color(0xFF0F1A14);
+  static const slate = Color(0xFF6B7A72);
+  static const fog = Color(0xFFF3F6F4);
+  static const mist = Color(0xFFE8EDE9);
+  static const white = Color(0xFFFFFFFF);
+
+  static const headerGrad = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFF0A5C47), Color(0xFF0D7A5F), Color(0xFF0F926F)],
+    stops: [0.0, 0.55, 1.0],
+  );
+
+  static List<BoxShadow> get cardShadow => [
+        BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 12, offset: const Offset(0, 3)),
+      ];
+
+  static TextStyle label(double sz, {Color c = ink, FontWeight fw = FontWeight.w600}) =>
+      TextStyle(fontSize: sz, fontWeight: fw, color: c);
+}
+
 class Product {
   final String id;
-  String name;
-  String category;
-  int quantity;
+  String name, category;
+  int quantity, minStock;
   double price;
-  int minStock;
-  DateTime addedDate;
-  String? barcode;
+  String? barcode, imageUrl;
+  final DateTime addedDate;
 
   Product({
     required this.id,
@@ -25,1647 +57,1260 @@ class Product {
     required this.quantity,
     required this.price,
     required this.minStock,
-    required this.addedDate,
     this.barcode,
+    this.imageUrl,
+    required this.addedDate,
   });
 
-  bool get isLowStock => quantity <= minStock;
+  bool get stockFaible => quantity <= minStock && quantity > 0;
+  bool get stockVide => quantity == 0;
+  bool get stockOk => quantity > minStock;
 
-  factory Product.fromMap(Map<String, dynamic> map) => Product(
-        id: map['id'].toString(),
-        name: map['name'] ?? '',
-        category: map['category'] ?? 'Autre',
-        quantity: (map['quantity'] as num).toInt(),
-        price: (map['price'] as num).toDouble(),
-        minStock: (map['min_stock'] as num).toInt(),
-        addedDate: DateTime.parse(map['added_date']),
-        barcode: map['barcode'],
+  factory Product.fromMap(Map<String, dynamic> m) => Product(
+        id: m['id'],
+        name: m['name'],
+        category: m['category'] ?? 'Alimentaire',
+        quantity: (m['quantity'] as int?) ?? 0,
+        price: (m['price'] as num?)?.toDouble() ?? 0,
+        minStock: (m['min_stock'] as int?) ?? 5,
+        barcode: m['barcode'],
+        imageUrl: m['image_url'],
+        addedDate: DateTime.parse(m['added_date']),
       );
 
-  Map<String, dynamic> toMap() => {
+  Map<String, dynamic> toMap(int cid) => {
         'id': id,
+        'commercant_id': cid,
         'name': name,
         'category': category,
         'quantity': quantity,
         'price': price,
         'min_stock': minStock,
-        'added_date': addedDate.toIso8601String(),
         'barcode': barcode,
+        'image_url': imageUrl,
+        'added_date': addedDate.toIso8601String(),
       };
 }
 
-// ─────────────────────────────────────────
-// PAGE SCANNER
-// ─────────────────────────────────────────
-class ScannerPage extends StatefulWidget {
-  final Function(String) onScanned;
-  const ScannerPage({super.key, required this.onScanned});
-
-  @override
-  State<ScannerPage> createState() => _ScannerPageState();
-}
-
-class _ScannerPageState extends State<ScannerPage> {
-  final MobileScannerController _controller = MobileScannerController();
-  bool _hasScanned = false;
-  bool _torchOn = false;
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  void _onDetect(BarcodeCapture capture) {
-    if (_hasScanned) return;
-    final barcode = capture.barcodes.firstOrNull;
-    if (barcode?.rawValue != null) {
-      _hasScanned = true;
-      HapticFeedback.mediumImpact();
-      widget.onScanned(barcode!.rawValue!);
-      Navigator.pop(context);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    const green = Color(0xFF0F6E56);
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: green,
-        foregroundColor: Colors.white,
-        title: const Text('Scanner un produit',
-            style: TextStyle(fontWeight: FontWeight.bold)),
-        actions: [
-          IconButton(
-            icon: Icon(_torchOn ? Icons.flash_on : Icons.flash_off),
-            onPressed: () {
-              setState(() => _torchOn = !_torchOn);
-              _controller.toggleTorch();
-            },
-          ),
-          IconButton(
-              icon: const Icon(Icons.flip_camera_ios),
-              onPressed: _controller.switchCamera),
-        ],
-      ),
-      body: Stack(children: [
-        MobileScanner(controller: _controller, onDetect: _onDetect),
-        Column(children: [
-          Expanded(
-              child: Container(color: Colors.black.withOpacity(0.5))),
-          Row(children: [
-            Expanded(
-                child: Container(color: Colors.black.withOpacity(0.5))),
-            Container(
-              width: 260,
-              height: 260,
-              decoration: BoxDecoration(
-                border: Border.all(color: green, width: 3),
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-            Expanded(
-                child: Container(color: Colors.black.withOpacity(0.5))),
-          ]),
-          Expanded(
-              child: Container(color: Colors.black.withOpacity(0.5))),
-        ]),
-        const Center(child: _ScanLine()),
-        Positioned(
-          bottom: 60,
-          left: 0,
-          right: 0,
-          child: Column(children: [
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.6),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: const Text('Placez le code-barres dans le cadre',
-                  style: TextStyle(color: Colors.white, fontSize: 14),
-                  textAlign: TextAlign.center),
-            ),
-            const SizedBox(height: 16),
-            TextButton.icon(
-              onPressed: () => Navigator.pop(context),
-              icon: const Icon(Icons.close, color: Colors.white),
-              label: const Text('Annuler',
-                  style: TextStyle(color: Colors.white, fontSize: 16)),
-            ),
-          ]),
-        ),
-      ]),
-    );
-  }
-}
-
-class _ScanLine extends StatefulWidget {
-  const _ScanLine();
-  @override
-  State<_ScanLine> createState() => _ScanLineState();
-}
-
-class _ScanLineState extends State<_ScanLine>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _anim;
-  late Animation<double> _position;
-
-  @override
-  void initState() {
-    super.initState();
-    _anim = AnimationController(
-        vsync: this, duration: const Duration(seconds: 2))
-      ..repeat(reverse: true);
-    _position = Tween<double>(begin: -120, end: 120)
-        .animate(CurvedAnimation(parent: _anim, curve: Curves.easeInOut));
-  }
-
-  @override
-  void dispose() {
-    _anim.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-        animation: _position,
-        builder: (_, __) => Transform.translate(
-          offset: Offset(0, _position.value),
-          child: Container(
-              width: 260, height: 2, color: const Color(0xFF0F6E56)),
-        ),
-      );
-}
-
-// ─────────────────────────────────────────
-// PAGE PRINCIPALE STOCK
-// ─────────────────────────────────────────
+// ========== PAGE DE GESTION DE STOCK (avec mode sélection) ==========
 class StockPage extends StatefulWidget {
-  /// false = mode normal (gestion stock)
-  /// true  = mode sélection (choisir produits pour une dette)
+  final int commercantId;
   final bool isSelectionMode;
-
-  const StockPage({super.key, this.isSelectionMode = false});
+  const StockPage({super.key, required this.commercantId, this.isSelectionMode = false});
 
   @override
   State<StockPage> createState() => _StockPageState();
 }
 
-class _StockPageState extends State<StockPage> {
-  static const Color green = Color(0xFF0F6E56);
-  static const Color greenLight = Color(0xFFE8F5E9);
+class _StockPageState extends State<StockPage> with TickerProviderStateMixin {
+  // Images temporaires
+  Uint8List? _imageBytesTemp;
+  String? _imageTempExt;
 
-  final List<String> categories = [
-    'Tous',
-    'Alimentaire',
-    'Boissons',
-    'Hygiène',
-    'Autre'
-  ];
+  late TabController _tabCtrl;
+  final _searchCtrl = TextEditingController();
+  final _searchFocus = FocusNode();
 
   List<Product> _products = [];
   bool _loading = true;
-  String _searchQuery = '';
-  String _selectedCategory = 'Tous';
-  int _currentIndex = 0;
+  String _recherche = '';
+  String _filtreCat = 'Tous';
+  final List<String> categories = ['Tous', 'Alimentaire', 'Boissons', 'Hygiène', 'Autre'];
+  RealtimeChannel? _channel;
 
-  /// Sélection en mode dette : productId → quantité choisie
-  final Map<String, int> _selectionQty = {};
+  // Pour le mode sélection
+  final Map<String, int> _selectionQuantities = {};
 
   @override
   void initState() {
     super.initState();
+    if (!widget.isSelectionMode) {
+      _tabCtrl = TabController(length: 2, vsync: this);
+    }
     _chargerProduits();
+    _abonnerRealtime();
+    _searchCtrl.addListener(() {
+      setState(() => _recherche = _searchCtrl.text);
+    });
   }
 
-  // ─── SUPABASE ──────────────────────────────────────────────────────────────
+  @override
+  void dispose() {
+    _channel?.unsubscribe();
+    if (!widget.isSelectionMode) _tabCtrl.dispose();
+    _searchCtrl.dispose();
+    _searchFocus.dispose();
+    super.dispose();
+  }
+
+  void _abonnerRealtime() {
+    _channel = _sb.channel('products_changes').onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'products',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'commercant_id',
+            value: widget.commercantId,
+          ),
+          callback: (payload) {
+            final ev = payload.eventType;
+            if (ev == PostgresChangeEvent.insert) {
+              final p = Product.fromMap(payload.newRecord);
+              if (!_products.any((x) => x.id == p.id)) setState(() => _products.insert(0, p));
+            } else if (ev == PostgresChangeEvent.update) {
+              final p = Product.fromMap(payload.newRecord);
+              setState(() {
+                final i = _products.indexWhere((x) => x.id == p.id);
+                if (i != -1) _products[i] = p;
+              });
+              if (p.stockFaible || p.stockVide) _alerteStock(p);
+            } else if (ev == PostgresChangeEvent.delete) {
+              final id = payload.oldRecord['id'] as String?;
+              if (id != null) setState(() => _products.removeWhere((x) => x.id == id));
+            }
+          },
+        ).subscribe();
+  }
 
   Future<void> _chargerProduits() async {
     setState(() => _loading = true);
     try {
-      final data = await supabase
+      final data = await _sb
           .from('products')
           .select()
+          .eq('commercant_id', widget.commercantId)
           .order('added_date', ascending: false);
-      setState(() {
-        _products = (data as List).map((e) => Product.fromMap(e)).toList();
-        _loading = false;
-      });
+      _products = (data as List).map((e) => Product.fromMap(e)).toList();
     } catch (e) {
-      setState(() => _loading = false);
-      _toast('Erreur chargement : $e', success: false);
+      _toast('Erreur chargement : $e', ok: false);
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
   Future<void> _ajouterProduit(Product p) async {
+    setState(() => _products.insert(0, p));
     try {
-      await supabase.from('products').insert(p.toMap());
-      await _chargerProduits();
-      _toast('${p.name} ajouté !', success: true);
+      await _sb.from('products').insert(p.toMap(widget.commercantId));
+      _toast('✅ ${p.name} ajouté !', ok: true);
     } catch (e) {
-      _toast('Erreur ajout : $e', success: false);
+      setState(() => _products.removeWhere((x) => x.id == p.id));
+      _toast('Erreur : $e', ok: false);
     }
   }
 
   Future<void> _modifierProduit(Product p) async {
+    final i = _products.indexWhere((x) => x.id == p.id);
+    final old = i != -1 ? _products[i] : null;
+    setState(() {
+      if (i != -1) _products[i] = p;
+    });
     try {
-      await supabase.from('products').update(p.toMap()).eq('id', p.id);
-      await _chargerProduits();
-      _toast('${p.name} modifié !', success: true);
+      await _sb.from('products').update(p.toMap(widget.commercantId)).eq('id', p.id);
+      _toast('✅ ${p.name} modifié !', ok: true);
     } catch (e) {
-      _toast('Erreur modification : $e', success: false);
+      if (old != null) setState(() => _products[i] = old);
+      _toast('Erreur : $e', ok: false);
     }
   }
 
-  Future<void> _supprimerProduit(String id) async {
+  Future<void> _supprimerProduit(Product p) async {
+    final i = _products.indexWhere((x) => x.id == p.id);
+    setState(() => _products.removeWhere((x) => x.id == p.id));
     try {
-      await supabase.from('products').delete().eq('id', id);
-      await _chargerProduits();
-      _toast('Produit supprimé', success: true);
+      await _sb.from('products').delete().eq('id', p.id);
+      if (p.imageUrl != null) {
+        final fn = p.imageUrl!.split('/').last;
+        await _sb.storage.from('product-images').remove([fn]);
+      }
+      _toast('Produit supprimé', ok: true);
     } catch (e) {
-      _toast('Erreur suppression : $e', success: false);
+      setState(() => _products.insert(i.clamp(0, _products.length), p));
+      _toast('Erreur : $e', ok: false);
     }
   }
 
-  Future<void> _rechercherProduits(String query) async {
-    if (query.isEmpty) {
-      await _chargerProduits();
-      return;
-    }
-    setState(() => _loading = true);
+  Future<void> _ajusterQuantite(Product p, int delta) async {
+    final nQte = (p.quantity + delta).clamp(0, 9999);
+    final old = p.quantity;
+    final i = _products.indexWhere((x) => x.id == p.id);
+    setState(() {
+      if (i != -1) _products[i].quantity = nQte;
+    });
+    if (i != -1 && (_products[i].stockFaible || _products[i].stockVide)) _alerteStock(_products[i]);
     try {
-      final data = await supabase
-          .from('products')
-          .select()
-          .or('name.ilike.%$query%,barcode.ilike.%$query%');
+      await _sb.from('products').update({'quantity': nQte}).eq('id', p.id);
+    } catch (e) {
       setState(() {
-        _products = (data as List).map((e) => Product.fromMap(e)).toList();
-        _loading = false;
+        if (i != -1) _products[i].quantity = old;
       });
+      _toast('Erreur : $e', ok: false);
+    }
+  }
+
+  Future<String?> _uploadImage(File f, String pid) async {
+    try {
+      final ext = f.path.split('.').last.toLowerCase();
+      final fn = 'product_${pid}_${DateTime.now().millisecondsSinceEpoch}.$ext';
+      final b = await f.readAsBytes();
+      await _sb.storage.from('product-images').uploadBinary(fn, b,
+          fileOptions: FileOptions(contentType: 'image/$ext', upsert: true));
+      return _sb.storage.from('product-images').getPublicUrl(fn);
     } catch (e) {
-      setState(() => _loading = false);
+      _toast('Erreur upload : $e', ok: false);
+      return null;
     }
   }
 
-  // ─── GETTERS ───────────────────────────────────────────────────────────────
-
-  List<Product> get filteredProducts {
-    if (_selectedCategory == 'Tous') return _products;
-    return _products.where((p) => p.category == _selectedCategory).toList();
-  }
-
-  List<Product> get lowStockProducts =>
-      _products.where((p) => p.isLowStock).toList();
-
-  int get lowStockCount => lowStockProducts.length;
-
-  double get totalValue =>
-      _products.fold(0, (s, p) => s + (p.price * p.quantity));
-
-  Map<String, int> get categoryCount {
-    final map = <String, int>{};
-    for (var p in _products) map[p.category] = (map[p.category] ?? 0) + 1;
-    return map;
-  }
-
-  int get totalArticlesSelectionnes =>
-      _selectionQty.values.fold(0, (s, q) => s + q);
-
-  // ─── VALIDATION SÉLECTION → retour vers PageDette ─────────────────────────
-
-  void _validerSelection() {
-    final List<Map<String, dynamic>> resultat = [];
-
-    for (final entry in _selectionQty.entries) {
-      final product = _products.firstWhere(
-        (p) => p.id == entry.key,
-        orElse: () => Product(
-          id: entry.key,
-          name: 'Produit',
-          category: 'Autre',
-          quantity: 0,
-          price: 0,
-          minStock: 0,
-          addedDate: DateTime.now(),
-        ),
-      );
-
-      resultat.add({
-        'nom': product.name,
-        'prix': product.price,
-        'quantite': entry.value,
-        'category': product.category,
-        // Image locale par catégorie
-        'image': <String, String>{
-          'Alimentaire': 'lib/assets/categories/aliment.jpg',
-          'Boissons': 'lib/assets/categories/boisson.jpg',
-          'Hygiène': 'lib/assets/categories/hygienne.jpg',
-          'Autre': 'lib/assets/categories/autre.jpg',
-        }[product.category],
-        'image_url': null, // si tu as des URL Supabase Storage
-      });
+  Future<String?> _uploadImageBytes(Uint8List b, String pid, String ext) async {
+    try {
+      final ce = ext.toLowerCase().replaceAll('.', '');
+      final fn = 'product_${pid}_${DateTime.now().millisecondsSinceEpoch}.$ce';
+      await _sb.storage.from('product-images').uploadBinary(fn, b,
+          fileOptions: FileOptions(contentType: 'image/$ce', upsert: true));
+      return _sb.storage.from('product-images').getPublicUrl(fn);
+    } catch (e) {
+      _toast('Erreur upload : $e', ok: false);
+      return null;
     }
-
-    Navigator.pop(context, resultat);
   }
 
-  // ─── SCANNER ───────────────────────────────────────────────────────────────
-
-  void _openScanner({TextEditingController? prefill}) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ScannerPage(
-          onScanned: (code) async {
-            if (prefill != null) {
-              prefill.text = code;
-              return;
-            }
-            setState(() => _searchQuery = code);
-            await _rechercherProduits(code);
-            if (!mounted) return;
-            final found = _products.where((p) => p.barcode == code).toList();
-            if (found.isEmpty) {
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                backgroundColor: Colors.orange,
-                content: Text('Produit non trouvé : $code'),
-                action: SnackBarAction(
-                  label: 'Ajouter',
-                  textColor: Colors.white,
-                  onPressed: () => _showAddProductDialog(barcode: code),
-                ),
-              ));
-            } else {
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                backgroundColor: green,
-                content: Text('✓ Trouvé : ${found.first.name}'),
-              ));
-            }
-          },
+  Future<File?> _choisirImage() async {
+    if (kIsWeb) return await _pickerDepuis(ImageSource.gallery);
+    ImageSource? src = await showModalBottomSheet<ImageSource>(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 18),
+                decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2)),
+              ),
+              Text('Ajouter une photo', style: _S.label(16, c: _S.emeraldMid, fw: FontWeight.w800)),
+              const SizedBox(height: 16),
+              _SourceTile(Icons.camera_alt, 'Prendre une photo', _S.emeraldFaint, _S.emeraldMid,
+                  () => Navigator.pop(context, ImageSource.camera)),
+              const SizedBox(height: 10),
+              _SourceTile(Icons.photo_library, 'Depuis la galerie', const Color(0xFFE3F2FD), Colors.blue,
+                  () => Navigator.pop(context, ImageSource.gallery)),
+              const SizedBox(height: 8),
+            ],
+          ),
         ),
+      ),
+    );
+    if (src == null) return null;
+    return await _pickerDepuis(src);
+  }
+
+  Future<File?> _pickerDepuis(ImageSource src) async {
+    final picked = await ImagePicker().pickImage(source: src, maxWidth: 800, maxHeight: 800, imageQuality: 80);
+    if (picked == null) return null;
+    _imageBytesTemp = await picked.readAsBytes();
+    final parts = picked.name.split('.');
+    _imageTempExt = parts.length > 1 ? parts.last : 'jpg';
+    if (kIsWeb) return null;
+    return File(picked.path);
+  }
+
+  void _alerteStock(Product p) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Text('⚠️', style: TextStyle(fontSize: 18)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(p.stockVide ? '${p.name} : STOCK VIDE !' : '${p.name} : stock faible (${p.quantity} restants)'),
+            ),
+          ],
+        ),
+        backgroundColor: p.stockVide ? _S.coral : _S.orange,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(16),
+        duration: const Duration(seconds: 4),
       ),
     );
   }
 
-  // ─── BUILD ─────────────────────────────────────────────────────────────────
+  List<Product> get _filtres => _products.where((p) {
+        final matchCat = _filtreCat == 'Tous' || p.category == _filtreCat;
+        final q = _recherche.trim().toLowerCase();
+        final matchSrch = q.isEmpty ||
+            p.name.toLowerCase().contains(q) ||
+            (p.barcode ?? '').contains(q) ||
+            p.category.toLowerCase().contains(q);
+        return matchCat && matchSrch;
+      }).toList();
+
+  List<Product> get _alertes => _products.where((p) => p.stockFaible || p.stockVide).toList()
+    ..sort((a, b) => a.quantity.compareTo(b.quantity));
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF5F5F5),
-      appBar: _buildAppBar(),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator(color: green))
-          : IndexedStack(
-              index: _currentIndex,
-              children: [
-                _buildStockList(),
-                _buildStats(),
-                _buildAlerts(),
-              ],
-            ),
-      bottomNavigationBar: widget.isSelectionMode ? null : _buildBottomNav(),
+    print('🔥 Mode sélection : ${widget.isSelectionMode}'); // Vérification
 
-      // ── FAB conditionnel ──
+    return Scaffold(
+      backgroundColor: _S.fog,
+      body: Column(
+        children: [
+          _buildHeader(),
+          _buildSearchBar(),
+          _buildFiltresCategorie(),
+          if (!widget.isSelectionMode && _alertes.isNotEmpty) _buildBanniereAlertes(),
+          if (!widget.isSelectionMode) _buildTabBar(),
+          Expanded(
+            child: _loading
+                ? Center(child: CircularProgressIndicator(color: _S.emeraldMid, strokeWidth: 2.5))
+                : widget.isSelectionMode
+                    ? _buildSelectionList()
+                    : TabBarView(controller: _tabCtrl, children: [_buildListeProduits(), _buildOngletAlertes()]),
+          ),
+        ],
+      ),
       floatingActionButton: widget.isSelectionMode
-          ? totalArticlesSelectionnes > 0
+          ? (_selectionQuantities.values.fold(0, (a, b) => a + b) > 0
               ? FloatingActionButton.extended(
-                  onPressed: _validerSelection,
-                  backgroundColor: green,
-                  icon: const Icon(Icons.check_circle, color: Colors.white),
+                  onPressed: () {
+                    final result = _selectionQuantities.entries.map((e) {
+                      final p = _products.firstWhere((prod) => prod.id == e.key);
+                      return {
+                        'id': p.id,
+                        'name': p.name,
+                        'price': p.price,
+                        'quantite': e.value,
+                        'barcode': p.barcode,
+                        'imageUrl': p.imageUrl,
+                      };
+                    }).toList();
+                    Navigator.pop(context, result);
+                  },
+                  backgroundColor: _S.emeraldMid,
+                  icon: const Icon(Icons.check, color: Colors.white),
                   label: Text(
-                    'Valider  ($totalArticlesSelectionnes article${totalArticlesSelectionnes > 1 ? 's' : ''})',
-                    style: const TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.bold),
+                    'Valider (${_selectionQuantities.values.fold(0, (a, b) => a + b)} article${_selectionQuantities.values.fold(0, (a, b) => a + b) > 1 ? 's' : ''})',
                   ),
                 )
-              : null
-          : _currentIndex == 0
-              ? _buildFAB()
-              : null,
+              : null)
+          : FloatingActionButton.extended(
+              onPressed: () => _ouvrirFormulaire(),
+              backgroundColor: _S.emeraldMid,
+              foregroundColor: Colors.white,
+              icon: const Icon(Icons.add),
+              label: const Text('Ajouter'),
+            ),
     );
   }
 
-  // ── APP BAR ────────────────────────────────────────────────────────────────
-
-  PreferredSizeWidget _buildAppBar() {
-    if (widget.isSelectionMode) {
-      return AppBar(
-        backgroundColor: green,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pop(context, null), // annule
-        ),
-        title: const Text('Choisir les produits',
-            style: TextStyle(fontWeight: FontWeight.bold)),
-        actions: [
-          // Recherche en mode sélection aussi
-          IconButton(
-            icon: const Icon(Icons.search),
-            onPressed: () => showSearch(
-              context: context,
-              delegate: _ProductSearchDelegate(_products, _selectionQty,
-                  green, (id, qty) => setState(() => _selectionQty[id] = qty)),
-            ),
-          ),
-          if (totalArticlesSelectionnes > 0)
-            Padding(
-              padding: const EdgeInsets.only(right: 12),
-              child: Center(
+  // ----- HEADER (partagé entre les deux modes) -----
+  Widget _buildHeader() {
+    return Container(
+      decoration: const BoxDecoration(gradient: _S.headerGrad),
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+          child: Row(
+            children: [
+              GestureDetector(
+                onTap: () => Navigator.pop(context),
                 child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    '$totalArticlesSelectionnes',
-                    style: const TextStyle(
-                        color: green,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14),
-                  ),
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(12)),
+                  child: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 18),
                 ),
               ),
-            ),
-        ],
-      );
-    }
-
-    return AppBar(
-      backgroundColor: green,
-      foregroundColor: Colors.white,
-      elevation: 0,
-      title: _currentIndex == 0
-          ? TextField(
-              onChanged: (v) {
-                setState(() => _searchQuery = v);
-                _rechercherProduits(v);
-              },
-              style: const TextStyle(color: Colors.white, fontSize: 16),
-              decoration: InputDecoration(
-                hintText: 'Rechercher un produit...',
-                hintStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
-                border: InputBorder.none,
-                prefixIcon: const Icon(Icons.search, color: Colors.white),
-                suffixIcon: _searchQuery.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(Icons.clear, color: Colors.white),
-                        onPressed: () {
-                          setState(() => _searchQuery = '');
-                          _chargerProduits();
-                        })
-                    : null,
-              ),
-            )
-          : const Text('Gestion de Stock',
-              style: TextStyle(fontWeight: FontWeight.bold)),
-      actions: [
-        if (_currentIndex == 0)
-          IconButton(
-              icon: const Icon(Icons.qr_code_scanner),
-              onPressed: () => _openScanner()),
-        IconButton(
-          icon: const Icon(Icons.refresh),
-          onPressed: _chargerProduits,
-          tooltip: 'Rafraîchir',
-        ),
-        Stack(children: [
-          IconButton(
-            icon: const Icon(Icons.notifications),
-            onPressed: () => setState(() => _currentIndex = 2),
-          ),
-          if (lowStockCount > 0)
-            Positioned(
-              right: 8,
-              top: 8,
-              child: Container(
-                padding: const EdgeInsets.all(4),
-                decoration: const BoxDecoration(
-                    color: Colors.red, shape: BoxShape.circle),
-                child: Text('$lowStockCount',
-                    style: const TextStyle(
-                        color: Colors.white, fontSize: 10)),
-              ),
-            ),
-        ]),
-      ],
-    );
-  }
-
-  // ── BOTTOM NAV (mode normal seulement) ────────────────────────────────────
-
-  Widget _buildBottomNav() {
-    return BottomNavigationBar(
-      currentIndex: _currentIndex,
-      onTap: (i) => setState(() => _currentIndex = i),
-      selectedItemColor: green,
-      unselectedItemColor: Colors.grey,
-      items: [
-        BottomNavigationBarItem(
-          icon:
-              _navImage('lib/assets/categories/aliment.jpg', Icons.inventory_2),
-          label: 'Stock',
-        ),
-        BottomNavigationBarItem(
-          icon: _navImage('lib/assets/categories/stats.jpg', Icons.bar_chart),
-          label: 'Statistiques',
-        ),
-        BottomNavigationBarItem(
-          icon: Badge(
-            isLabelVisible: lowStockCount > 0,
-            label: Text('$lowStockCount'),
-            child: _navImage(
-                'lib/assets/categories/alerte.webp', Icons.warning_amber),
-          ),
-          label: 'Alertes',
-        ),
-      ],
-    );
-  }
-
-  Widget _navImage(String path, IconData fallback) {
-    return Image.asset(path,
-        width: 24,
-        height: 24,
-        errorBuilder: (_, __, ___) => Icon(fallback, size: 24));
-  }
-
-  // ── FAB (mode normal) ─────────────────────────────────────────────────────
-
-  Widget _buildFAB() {
-    return Column(mainAxisSize: MainAxisSize.min, children: [
-      FloatingActionButton(
-        heroTag: 'scan_fab',
-        mini: true,
-        backgroundColor: Colors.white,
-        foregroundColor: green,
-        onPressed: () => _openScanner(),
-        child: const Icon(Icons.qr_code_scanner),
-      ),
-      const SizedBox(height: 8),
-      FloatingActionButton.extended(
-        heroTag: 'add_fab',
-        onPressed: () => _showAddProductDialog(),
-        backgroundColor: green,
-        foregroundColor: Colors.white,
-        icon: const Icon(Icons.add),
-        label: const Text('Ajouter'),
-      ),
-    ]);
-  }
-
-  // ─────────────────────────────────────────
-  // ONGLET 1 : LISTE
-  // ─────────────────────────────────────────
-
-  Widget _buildStockList() {
-    return Column(children: [
-      // ── Bannière mode sélection ──
-      if (widget.isSelectionMode)
-        Container(
-          width: double.infinity,
-          color: green.withOpacity(0.08),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          child: Row(children: [
-            const Icon(Icons.touch_app, color: green, size: 18),
-            const SizedBox(width: 8),
-            const Expanded(
-              child: Text(
-                'Appuyez sur + pour ajouter un produit à la commande',
-                style: TextStyle(color: green, fontSize: 13),
-              ),
-            ),
-          ]),
-        ),
-
-      // Barre catégories
-      Container(
-        color: green,
-        height: 56,
-        child: ListView.builder(
-          scrollDirection: Axis.horizontal,
-          padding:
-              const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          itemCount: categories.length,
-          itemBuilder: (context, i) {
-            final selected = _selectedCategory == categories[i];
-            return GestureDetector(
-              onTap: () =>
-                  setState(() => _selectedCategory = categories[i]),
-              child: Container(
-                margin: const EdgeInsets.only(right: 8),
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                decoration: BoxDecoration(
-                  color: selected
-                      ? Colors.white
-                      : Colors.white.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color:
-                        selected ? Colors.white : Colors.transparent,
-                    width: 1.5,
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (categories[i] == 'Tous')
-                      Icon(Icons.grid_view,
-                          size: 18,
-                          color: selected ? green : Colors.white)
-                    else
-                      SizedBox(
-                        width: 22,
-                        height: 22,
-                        child: _categoryImageWidget(
-                            categories[i], 22, selected),
-                      ),
-                    const SizedBox(width: 6),
-                    Text(categories[i],
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: selected ? green : Colors.white,
-                          fontWeight: selected
-                              ? FontWeight.bold
-                              : FontWeight.normal,
-                        )),
+                    Text(
+                      widget.isSelectionMode ? 'Choisir des produits' : 'Gestion du stock',
+                      style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800, letterSpacing: -0.3),
+                    ),
+                    Text('${_products.length} produit(s)', style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 12)),
                   ],
                 ),
               ),
-            );
-          },
+              IconButton(onPressed: _chargerProduits, icon: const Icon(Icons.refresh, color: Colors.white)),
+              if (!widget.isSelectionMode && _alertes.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(color: _S.coral.withValues(alpha: 0.9), borderRadius: BorderRadius.circular(20)),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('⚠️', style: TextStyle(fontSize: 12)),
+                      const SizedBox(width: 4),
+                      Text('${_alertes.length}', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800)),
+                    ],
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
-
-      // Résumé
-      Container(
-        color: greenLight,
-        padding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        child: Row(children: [
-          const Icon(Icons.inventory, size: 16, color: green),
-          const SizedBox(width: 6),
-          Text('${filteredProducts.length} produit(s)',
-              style: const TextStyle(
-                  color: green,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500)),
-          const Spacer(),
-          if (widget.isSelectionMode && totalArticlesSelectionnes > 0)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                  color: green, borderRadius: BorderRadius.circular(10)),
-              child: Text(
-                '$totalArticlesSelectionnes sélectionné(s)',
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold),
-              ),
-            ),
-        ]),
-      ),
-
-      Expanded(
-        child: filteredProducts.isEmpty
-            ? Center(
-                child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                  Icon(Icons.search_off, size: 64, color: Colors.grey[400]),
-                  const SizedBox(height: 12),
-                  Text('Aucun produit trouvé',
-                      style: TextStyle(
-                          color: Colors.grey[600], fontSize: 16)),
-                  const SizedBox(height: 16),
-                  ElevatedButton.icon(
-                    onPressed: _chargerProduits,
-                    style: ElevatedButton.styleFrom(
-                        backgroundColor: green,
-                        foregroundColor: Colors.white),
-                    icon: const Icon(Icons.refresh, size: 16),
-                    label: const Text('Rafraîchir'),
-                  ),
-                ]))
-            : RefreshIndicator(
-                color: green,
-                onRefresh: _chargerProduits,
-                child: ListView.builder(
-                  padding: const EdgeInsets.all(12),
-                  itemCount: filteredProducts.length,
-                  itemBuilder: (_, i) =>
-                      _buildProductCard(filteredProducts[i]),
-                ),
-              ),
-      ),
-    ]);
+    );
   }
 
-  // ── CARTE PRODUIT ──────────────────────────────────────────────────────────
-
-  Widget _buildProductCard(Product p) {
-    final bool enModeSelection = widget.isSelectionMode;
-    final int qtySelectionnee = _selectionQty[p.id] ?? 0;
-    final bool estSelectionne = qtySelectionnee > 0;
-
-    return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(
-          color: enModeSelection && estSelectionne
-              ? green
-              : p.isLowStock
-                  ? Colors.red.withOpacity(0.4)
-                  : Colors.grey.withOpacity(0.15),
-          width: enModeSelection && estSelectionne ? 2 : 0.5,
-        ),
-      ),
-      child: ListTile(
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        // Surlignage si sélectionné
-        tileColor: enModeSelection && estSelectionne
-            ? green.withOpacity(0.04)
-            : null,
-        leading: Container(
-          width: 52,
-          height: 52,
-          padding: const EdgeInsets.all(6),
-          decoration: BoxDecoration(
-            color: p.isLowStock ? Colors.red[50] : greenLight,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: p.isLowStock
-              ? Image.asset('lib/assets/categories/stock_bas.jpg',
-                  errorBuilder: (_, __, ___) => const Icon(Icons.warning_amber,
-                      color: Colors.red, size: 28))
-              : _categoryImageWidget(p.category, 28, false),
-        ),
-        title: Row(children: [
+  Widget _buildSearchBar() {
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
+      child: Row(
+        children: [
           Expanded(
-              child: Text(p.name,
-                  style: const TextStyle(
-                      fontWeight: FontWeight.w600, fontSize: 15))),
-          if (p.isLowStock && !enModeSelection)
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-              decoration: BoxDecoration(
-                  color: Colors.red[50],
-                  borderRadius: BorderRadius.circular(8)),
-              child: const Text('Stock bas',
-                  style: TextStyle(
-                      color: Colors.red,
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold)),
+            child: Container(
+              height: 44,
+              decoration: BoxDecoration(color: _S.fog, borderRadius: BorderRadius.circular(12), border: Border.all(color: _S.mist, width: 1)),
+              child: TextField(
+                controller: _searchCtrl,
+                focusNode: _searchFocus,
+                autofocus: false,
+                style: _S.label(14, c: _S.ink),
+                decoration: InputDecoration(
+                  hintText: 'Rechercher un produit…',
+                  hintStyle: _S.label(14, c: _S.slate, fw: FontWeight.w400),
+                  border: InputBorder.none,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                  prefixIcon: Icon(Icons.search, color: _S.slate, size: 20),
+                  suffixIcon: _recherche.isNotEmpty
+                      ? GestureDetector(
+                          onTap: () {
+                            _searchCtrl.clear();
+                            setState(() => _recherche = '');
+                          },
+                          child: Icon(Icons.close, color: _S.slate, size: 18),
+                        )
+                      : GestureDetector(
+                          onTap: () => _scannerBarcode(),
+                          child: Icon(Icons.qr_code_scanner, color: _S.emeraldMid, size: 20),
+                        ),
+                ),
+              ),
             ),
-        ]),
-        subtitle: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 4),
-              Row(children: [
-                _categoryImageWidget(p.category, 14, false),
-                const SizedBox(width: 4),
-                Text(p.category,
-                    style: const TextStyle(color: green, fontSize: 12)),
-                if (!enModeSelection) ...[
-                  const SizedBox(width: 12),
-                  Icon(Icons.calendar_today,
-                      size: 12, color: Colors.grey[500]),
-                  const SizedBox(width: 4),
-                  Text(_formatDate(p.addedDate),
-                      style: TextStyle(
-                          color: Colors.grey[500], fontSize: 12)),
-                ],
-                const Spacer(),
-                Text('${_formatPrice(p.price)} FCFA',
-                    style: const TextStyle(
-                        color: green,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14)),
-              ]),
-              const SizedBox(height: 4),
-              Row(children: [
-                Text('Dispo : ',
-                    style: TextStyle(
-                        color: Colors.grey[600], fontSize: 13)),
-                Text('${p.quantity}',
-                    style: TextStyle(
-                      color: p.isLowStock ? Colors.red : Colors.black87,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                    )),
-                if (!enModeSelection)
-                  Text(' / min ${p.minStock}',
-                      style: TextStyle(
-                          color: Colors.grey[400], fontSize: 12)),
-              ]),
-            ]),
+          ),
+        ],
+      ),
+    );
+  }
 
-        // ── Trailing : +/- en mode sélection, menu sinon ──
-        trailing: enModeSelection
-            ? Row(
+  Widget _buildFiltresCategorie() {
+    return Container(
+      color: Colors.white,
+      height: 46,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        itemCount: categories.length,
+        itemBuilder: (_, i) {
+          final sel = _filtreCat == categories[i];
+          final count = categories[i] == 'Tous'
+              ? _products.length
+              : _products.where((p) => p.category == categories[i]).length;
+          return GestureDetector(
+            onTap: () => setState(() => _filtreCat = categories[i]),
+            child: Container(
+              margin: const EdgeInsets.only(right: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                color: sel ? _S.emeraldMid : _S.fog,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: sel ? _S.emeraldMid : _S.mist, width: 1),
+              ),
+              child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (estSelectionne) ...[
-                    GestureDetector(
-                      onTap: () => setState(() {
-                        if (qtySelectionnee == 1) {
-                          _selectionQty.remove(p.id);
-                        } else {
-                          _selectionQty[p.id] = qtySelectionnee - 1;
-                        }
-                      }),
-                      child: Container(
-                        width: 32,
-                        height: 32,
-                        decoration: BoxDecoration(
-                          color: Colors.red[50],
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.red[300]!),
-                        ),
-                        child: const Icon(Icons.remove,
-                            color: Colors.red, size: 18),
-                      ),
-                    ),
-                    Padding(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 8),
-                      child: Text('$qtySelectionnee',
-                          style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color: green)),
-                    ),
-                  ],
-                  GestureDetector(
-                    onTap: qtySelectionnee < p.quantity
-                        ? () => setState(() =>
-                            _selectionQty[p.id] = qtySelectionnee + 1)
-                        : null,
-                    child: Container(
-                      width: 32,
-                      height: 32,
-                      decoration: BoxDecoration(
-                        color: qtySelectionnee < p.quantity
-                            ? greenLight
-                            : Colors.grey[100],
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: qtySelectionnee < p.quantity
-                              ? green
-                              : Colors.grey[300]!,
-                        ),
-                      ),
-                      child: Icon(Icons.add,
-                          color: qtySelectionnee < p.quantity
-                              ? green
-                              : Colors.grey,
-                          size: 18),
-                    ),
-                  ),
-                ],
-              )
-            : PopupMenuButton<String>(
-                icon: const Icon(Icons.more_vert, color: Colors.grey),
-                onSelected: (value) {
-                  if (value == 'edit') _showEditDialog(p);
-                  if (value == 'delete') _confirmDelete(p);
-                  if (value == 'add_stock') _showAddStockDialog(p);
-                },
-                itemBuilder: (_) => [
-                  PopupMenuItem(
-                      value: 'add_stock',
-                      child: Row(children: [
-                        _categoryImageWidget(p.category, 18, false),
-                        const SizedBox(width: 8),
-                        const Text('Ajouter stock'),
-                      ])),
-                  const PopupMenuItem(
-                      value: 'edit',
-                      child: Row(children: [
-                        Icon(Icons.edit, color: Colors.blue, size: 18),
-                        SizedBox(width: 8),
-                        Text('Modifier'),
-                      ])),
-                  const PopupMenuItem(
-                      value: 'delete',
-                      child: Row(children: [
-                        Icon(Icons.delete, color: Colors.red, size: 18),
-                        SizedBox(width: 8),
-                        Text('Supprimer'),
-                      ])),
+                  imageCategorie(categories[i], size: 14),
+                  const SizedBox(width: 5),
+                  Text('${categories[i]} ($count)',
+                      style: _S.label(11, c: sel ? Colors.white : _S.slate, fw: sel ? FontWeight.w700 : FontWeight.w500)),
                 ],
               ),
-
-        // Tap sur la carte en mode sélection = ajouter 1
-        onTap: enModeSelection
-            ? () {
-                if (qtySelectionnee < p.quantity) {
-                  setState(() =>
-                      _selectionQty[p.id] = qtySelectionnee + 1);
-                }
-              }
-            : null,
+            ),
+          );
+        },
       ),
     );
   }
 
-  // ─────────────────────────────────────────
-  // ONGLET 2 : STATISTIQUES
-  // ─────────────────────────────────────────
-
-  Widget _buildStats() {
-    final topProducts = [..._products]
-      ..sort((a, b) =>
-          (b.price * b.quantity).compareTo(a.price * a.quantity));
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child:
-          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        GridView.count(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          crossAxisCount: 2,
-          crossAxisSpacing: 12,
-          mainAxisSpacing: 12,
-          childAspectRatio: 1.6,
-          children: [
-            _statCard('Produits', '${_products.length}',
-                Icons.inventory_2, green),
-            _statCard('Valeur totale', '${_formatPrice(totalValue)} F',
-                Icons.account_balance_wallet, Colors.blue),
-            _statCard('Stock bas', '$lowStockCount',
-                Icons.warning_amber, Colors.orange),
-            _statCard('Catégories', '${categoryCount.length}',
-                Icons.category, Colors.purple),
-          ],
-        ),
-        const SizedBox(height: 24),
-        const Text('Répartition par catégorie',
-            style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: green)),
-        const SizedBox(height: 12),
-        ...categoryCount.entries
-            .map((e) => _categoryBar(e.key, e.value, _products.length)),
-        const SizedBox(height: 24),
-        const Text('Top produits (valeur stock)',
-            style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: green)),
-        const SizedBox(height: 12),
-        ...topProducts.take(5).map((p) => _topProductRow(p)),
-        const SizedBox(height: 24),
-        const Text('Ajouts récents',
-            style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: green)),
-        const SizedBox(height: 12),
-        ...([..._products]
-              ..sort((a, b) => b.addedDate.compareTo(a.addedDate)))
-            .take(3)
-            .map((p) => _recentProductRow(p)),
-      ]),
-    );
-  }
-
-  Widget _statCard(
-      String label, String value, IconData icon, Color color) {
+  // ----- Onglets (mode normal) -----
+  Widget _buildTabBar() {
     return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: [
-          BoxShadow(
-              color: color.withOpacity(0.1),
-              blurRadius: 8,
-              offset: const Offset(0, 2))
+      color: Colors.white,
+      child: TabBar(
+        controller: _tabCtrl,
+        indicatorColor: _S.emeraldMid,
+        indicatorWeight: 3,
+        labelColor: _S.emeraldMid,
+        unselectedLabelColor: _S.slate,
+        labelStyle: _S.label(12, fw: FontWeight.w700),
+        tabs: [
+          Tab(icon: const Icon(Icons.inventory_2, size: 18), text: 'Stock (${_filtres.length})'),
+          Tab(icon: Badge(isLabelVisible: _alertes.isNotEmpty, label: Text('${_alertes.length}'), child: const Icon(Icons.warning_amber, size: 18)), text: 'Alertes'),
         ],
       ),
-      child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    );
+  }
+
+  Widget _buildBanniereAlertes() {
+    return GestureDetector(
+      onTap: () => _tabCtrl.animateTo(1),
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(color: _S.coralLight, borderRadius: BorderRadius.circular(12), border: Border.all(color: _S.coral.withValues(alpha: 0.25))),
+        child: Row(
           children: [
-            Icon(icon, color: color, size: 22),
-            Column(
+            const Text('⚠️', style: TextStyle(fontSize: 16)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(value,
-                      style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          color: color)),
-                  Text(label,
-                      style: TextStyle(
-                          fontSize: 12, color: Colors.grey[600])),
-                ]),
-          ]),
-    );
-  }
-
-  Widget _categoryBar(String category, int count, int total) {
-    final percent = total > 0 ? count / total : 0.0;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Column(children: [
-        Row(children: [
-          _categoryImageWidget(category, 16, false),
-          const SizedBox(width: 8),
-          Text(category, style: const TextStyle(fontSize: 13)),
-          const Spacer(),
-          Text('$count produit(s)',
-              style:
-                  TextStyle(color: Colors.grey[600], fontSize: 13)),
-        ]),
-        const SizedBox(height: 4),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(4),
-          child: LinearProgressIndicator(
-            value: percent,
-            backgroundColor: Colors.grey[200],
-            valueColor: const AlwaysStoppedAnimation<Color>(green),
-            minHeight: 6,
-          ),
+                  Text('${_alertes.length} produit(s) en stock faible', style: _S.label(12, c: _S.coral, fw: FontWeight.w700)),
+                  Text(_alertes.map((p) => p.name).take(3).join(', ') + (_alertes.length > 3 ? '…' : ''),
+                      style: _S.label(11, c: _S.coral.withValues(alpha: 0.7), fw: FontWeight.w400)),
+                ],
+              ),
+            ),
+            Text('Voir →', style: _S.label(12, c: _S.coral, fw: FontWeight.w700)),
+          ],
         ),
-      ]),
+      ),
     );
   }
 
-  Widget _topProductRow(Product p) => Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(10)),
-        child: Row(children: [
-          _categoryImageWidget(p.category, 20, false),
-          const SizedBox(width: 10),
-          Expanded(
-              child:
-                  Text(p.name, style: const TextStyle(fontSize: 13))),
-          Text('${_formatPrice(p.price * p.quantity)} F',
-              style: const TextStyle(
-                  color: green,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 13)),
-        ]),
-      );
-
-  Widget _recentProductRow(Product p) => Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(10)),
-        child: Row(children: [
-          _categoryImageWidget(p.category, 20, false),
-          const SizedBox(width: 10),
-          Expanded(
-              child:
-                  Text(p.name, style: const TextStyle(fontSize: 13))),
-          Text(_formatDate(p.addedDate),
-              style:
-                  TextStyle(color: Colors.grey[500], fontSize: 12)),
-        ]),
-      );
-
-  // ─────────────────────────────────────────
-  // ONGLET 3 : ALERTES
-  // ─────────────────────────────────────────
-
-  Widget _buildAlerts() {
-    if (lowStockProducts.isEmpty) {
+  // ----- LISTE DE SÉLECTION (mode sélection) -----
+  Widget _buildSelectionList() {
+    if (_filtres.isEmpty) {
       return Center(
         child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-          const Icon(Icons.check_circle_outline, size: 72, color: green),
-          const SizedBox(height: 16),
-          const Text('Aucune alerte !',
-              style: TextStyle(
-                  fontSize: 18,
-                  color: green,
-                  fontWeight: FontWeight.bold)),
-          const SizedBox(height: 8),
-          Text('Tous vos stocks sont suffisants.',
-              style: TextStyle(color: Colors.grey[600])),
-        ]),
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Text('🧺', style: TextStyle(fontSize: 48)),
+            const SizedBox(height: 12),
+            Text(_recherche.isNotEmpty ? 'Aucun résultat' : 'Aucun produit', style: _S.label(14, c: _S.slate)),
+          ],
+        ),
       );
     }
-    return Column(children: [
-      Container(
-        width: double.infinity,
-        color: Colors.red[50],
-        padding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(children: [
-          const Icon(Icons.warning_amber, color: Colors.red, size: 20),
-          const SizedBox(width: 8),
-          Text(
-              '${lowStockProducts.length} produit(s) en stock insuffisant',
-              style: const TextStyle(
-                  color: Colors.red, fontWeight: FontWeight.bold)),
-        ]),
-      ),
-      Expanded(
-        child: ListView.builder(
-          padding: const EdgeInsets.all(12),
-          itemCount: lowStockProducts.length,
-          itemBuilder: (_, i) {
-            final p = lowStockProducts[i];
-            return Card(
-              elevation: 0,
-              margin: const EdgeInsets.only(bottom: 10),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-                side:
-                    const BorderSide(color: Colors.red, width: 1),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: Row(children: [
-                  Container(
-                    width: 52,
-                    height: 52,
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                        color: Colors.red[50],
-                        borderRadius: BorderRadius.circular(12)),
-                    child: _categoryImageWidget(p.category, 32, false),
-                  ),
+    return RefreshIndicator(
+      onRefresh: _chargerProduits,
+      color: _S.emeraldMid,
+      child: ListView.builder(
+        padding: const EdgeInsets.all(12),
+        itemCount: _filtres.length,
+        itemBuilder: (_, i) {
+          final p = _filtres[i];
+          final qty = _selectionQuantities[p.id] ?? 0;
+          return Card(
+            elevation: 0,
+            margin: const EdgeInsets.only(bottom: 10),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: qty > 0 ? _S.emeraldMid : _S.mist, width: qty > 0 ? 2 : 1),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  _buildImageProduit(p),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(p.name,
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.bold)),
-                          const SizedBox(height: 4),
-                          Text(
-                              '${p.category} • ${_formatDate(p.addedDate)}',
-                              style: TextStyle(
-                                  color: Colors.grey[600],
-                                  fontSize: 12)),
-                          const SizedBox(height: 6),
-                          Row(children: [
-                            _alertBadge(
-                                'Actuel : ${p.quantity}', Colors.red),
-                            const SizedBox(width: 8),
-                            _alertBadge(
-                                'Min : ${p.minStock}', Colors.orange),
-                          ]),
-                        ]),
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(p.name, style: _S.label(14, fw: FontWeight.w800)),
+                        Row(
+                          children: [
+                            imageCategorie(p.category, size: 12),
+                            const SizedBox(width: 4),
+                            Text(p.category, style: _S.label(11, c: _S.slate)),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text('${_fmtPrix(p.price)} F', style: _S.label(13, c: _S.emeraldMid, fw: FontWeight.w800)),
+                      ],
+                    ),
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.add_circle,
-                        color: green, size: 28),
-                    onPressed: () => _showAddStockDialog(p),
+                  Row(
+                    children: [
+                      if (qty > 0) ...[
+                        IconButton(
+                          onPressed: () => setState(() {
+                            if (qty == 1) _selectionQuantities.remove(p.id);
+                            else _selectionQuantities[p.id] = qty - 1;
+                          }),
+                          icon: const Icon(Icons.remove_circle, color: Colors.red),
+                        ),
+                        Text('$qty', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                      ],
+                      IconButton(
+                        onPressed: () {
+                          if (qty < p.quantity) setState(() => _selectionQuantities[p.id] = qty + 1);
+                        },
+                        icon: Icon(Icons.add_circle, color: qty < p.quantity ? _S.emeraldMid : Colors.grey),
+                      ),
+                    ],
                   ),
-                ]),
+                ],
               ),
-            );
-          },
-        ),
+            ),
+          );
+        },
       ),
-    ]);
+    );
   }
 
-  Widget _alertBadge(String text, Color color) => Container(
-        padding:
-            const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(6)),
-        child: Text(text,
-            style: TextStyle(
-                color: color,
-                fontSize: 11,
-                fontWeight: FontWeight.w600)),
+  // ----- LISTE PRODUITS (mode normal) -----
+  Widget _buildListeProduits() {
+    if (_filtres.isEmpty) return _emptyStock();
+    return RefreshIndicator(
+      color: _S.emeraldMid,
+      onRefresh: _chargerProduits,
+      child: ListView.builder(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 80),
+        itemCount: _filtres.length,
+        itemBuilder: (_, i) => _carteProduit(_filtres[i]),
+      ),
+    );
+  }
+
+  Widget _emptyStock() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Text('🧺', style: TextStyle(fontSize: 48)),
+          const SizedBox(height: 12),
+          Text(_recherche.isNotEmpty ? 'Aucun résultat pour "$_recherche"' : 'Aucun produit dans ce stock',
+              style: _S.label(14, c: _S.slate)),
+          const SizedBox(height: 16),
+          if (_recherche.isEmpty)
+            ElevatedButton.icon(
+              onPressed: () => _ouvrirFormulaire(),
+              style: ElevatedButton.styleFrom(backgroundColor: _S.emeraldMid, foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+              icon: const Icon(Icons.add),
+              label: const Text('Ajouter un produit'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _carteProduit(Product p) {
+    final couleur = p.stockVide ? _S.coral : p.stockFaible ? _S.orange : _S.emeraldMid;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: _S.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: _S.cardShadow,
+        border: Border.all(
+          color: p.stockVide ? _S.coral.withValues(alpha: 0.25) : p.stockFaible ? _S.orange.withValues(alpha: 0.2) : _S.mist,
+          width: 0.8,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            _buildImageProduit(p),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(child: Text(p.name, style: _S.label(14, fw: FontWeight.w800))),
+                      _StockBadge(p: p, couleur: couleur),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      imageCategorie(p.category, size: 12),
+                      const SizedBox(width: 4),
+                      Text(p.category, style: _S.label(11, c: _S.slate)),
+                      if (p.barcode != null) ...[
+                        const SizedBox(width: 8),
+                        Icon(Icons.qr_code, size: 11, color: _S.slate),
+                        const SizedBox(width: 2),
+                        Text(p.barcode!, style: _S.label(10, c: _S.slate)),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(color: _S.emeraldFaint, borderRadius: BorderRadius.circular(8)),
+                        child: Text('${_fmtPrix(p.price)} F', style: _S.label(13, c: _S.emeraldMid, fw: FontWeight.w800)),
+                      ),
+                      const Spacer(),
+                      _QteControls(p: p, couleur: couleur, onAjuster: (d) => _ajusterQuantite(p, d)),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text('Min stock : ${p.minStock} unités', style: _S.label(10, c: _S.slate)),
+                ],
+              ),
+            ),
+            PopupMenuButton<String>(
+              icon: Icon(Icons.more_vert, color: _S.slate, size: 20),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              onSelected: (v) {
+                if (v == 'edit') _ouvrirFormulaire(existant: p);
+                if (v == 'delete') _confirmerSuppression(p);
+                if (v == 'ajuster') _dialogAjusterQuantite(p);
+              },
+              itemBuilder: (_) => [
+                _menuItem('edit', Icons.edit, Colors.orange, 'Modifier'),
+                _menuItem('ajuster', Icons.tune, Colors.blue, 'Ajuster stock'),
+                _menuItem('delete', Icons.delete_outline, _S.coral, 'Supprimer'),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  PopupMenuItem<String> _menuItem(String val, IconData icon, Color c, String label) => PopupMenuItem(
+        value: val,
+        child: Row(
+          children: [
+            Icon(icon, color: c, size: 18),
+            const SizedBox(width: 10),
+            Text(label, style: _S.label(13)),
+          ],
+        ),
       );
 
-  // ─────────────────────────────────────────
-  // DIALOGUES
-  // ─────────────────────────────────────────
+  // ----- Image produit (utilisée partout) -----
+  Widget _buildImageProduit(Product p) {
+    final ph = Container(
+      width: 64,
+      height: 64,
+      decoration: BoxDecoration(color: _S.emeraldFaint, borderRadius: BorderRadius.circular(12)),
+      child: Center(child: imageCategorie(p.category, size: 30)),
+    );
+    if (p.imageUrl == null || p.imageUrl!.isEmpty) return ph;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: CachedNetworkImage(
+        imageUrl: p.imageUrl!,
+        width: 64,
+        height: 64,
+        fit: BoxFit.cover,
+        placeholder: (_, __) => Container(
+          width: 64,
+          height: 64,
+          decoration: BoxDecoration(color: _S.mist, borderRadius: BorderRadius.circular(12)),
+          child: Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: _S.emeraldMid))),
+        ),
+        errorWidget: (_, __, ___) => ph,
+      ),
+    );
+  }
 
-  void _showAddProductDialog({String? barcode}) {
-    final nameCtrl = TextEditingController();
-    final qtyCtrl = TextEditingController();
-    final priceCtrl = TextEditingController();
-    final minCtrl = TextEditingController(text: '5');
-    final barcodeCtrl = TextEditingController(text: barcode ?? '');
-    String selectedCat = 'Alimentaire';
+  // ----- Onglet Alertes (mode normal) -----
+  Widget _buildOngletAlertes() {
+    if (_alertes.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Text('✅', style: TextStyle(fontSize: 56)),
+            const SizedBox(height: 12),
+            Text('Tous les stocks sont OK !', style: _S.label(15, c: _S.slate)),
+          ],
+        ),
+      );
+    }
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
+      children: [
+        Container(
+          padding: const EdgeInsets.all(14),
+          margin: const EdgeInsets.only(bottom: 12),
+          decoration: BoxDecoration(color: _S.white, borderRadius: BorderRadius.circular(14), boxShadow: _S.cardShadow),
+          child: Row(
+            children: [
+              const Text('⚠️', style: TextStyle(fontSize: 28)),
+              const SizedBox(width: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('${_alertes.length} produit(s) à réapprovisionner', style: _S.label(13, c: _S.coral, fw: FontWeight.w700)),
+                  Text(
+                    '${_alertes.where((p) => p.stockVide).length} vide(s) · '
+                    '${_alertes.where((p) => p.stockFaible && !p.stockVide).length} faible(s)',
+                    style: _S.label(12, c: _S.slate),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        ..._alertes.map((p) => _carteAlerte(p)),
+      ],
+    );
+  }
+
+  Widget _carteAlerte(Product p) {
+    final c = p.stockVide ? _S.coral : _S.orange;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: _S.white,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: _S.cardShadow,
+        border: Border.all(color: c.withValues(alpha: 0.25)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
+            Stack(
+              children: [
+                _buildImageProduit(p),
+                Positioned(top: 0, right: 0, child: Text(p.stockVide ? '🔴' : '🟡', style: const TextStyle(fontSize: 14))),
+              ],
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(p.name, style: _S.label(14, fw: FontWeight.w800)),
+                  const SizedBox(height: 4),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: p.minStock > 0 ? (p.quantity / (p.minStock * 2)).clamp(0.0, 1.0) : 0,
+                      backgroundColor: _S.mist,
+                      valueColor: AlwaysStoppedAnimation<Color>(c),
+                      minHeight: 5,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Text('Stock : ', style: _S.label(12, c: _S.slate)),
+                      Text('${p.quantity}', style: _S.label(12, c: c, fw: FontWeight.w700)),
+                      Text(' / min ${p.minStock}', style: _S.label(11, c: _S.slate)),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: () => _dialogAjusterQuantite(p),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(color: _S.emeraldMid, borderRadius: BorderRadius.circular(12)),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.add_box, color: Colors.white, size: 20),
+                    const SizedBox(height: 2),
+                    Text('Réappro', style: _S.label(9, c: Colors.white, fw: FontWeight.w700)),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _ouvrirFormulaire({Product? existant}) {
+    _imageBytesTemp = null;
+    _imageTempExt = null;
+
+    final nomCtrl = TextEditingController(text: existant?.name);
+    final prixCtrl = TextEditingController(text: existant != null ? existant.price.toStringAsFixed(0) : '');
+    final qteCtrl = TextEditingController(text: existant != null ? '${existant.quantity}' : '0');
+    final minCtrl = TextEditingController(text: existant != null ? '${existant.minStock}' : '5');
+    final barcodeCtrl = TextEditingController(text: existant?.barcode);
+    String catSelect = existant?.category ?? 'Alimentaire';
+    String? imageUrl = existant?.imageUrl;
+    File? imageFich;
+    bool loadingImg = false;
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-          borderRadius:
-              BorderRadius.vertical(top: Radius.circular(20))),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setModal) => Padding(
+        builder: (ctx, setM) => Padding(
           padding: EdgeInsets.only(
-              left: 20,
-              right: 20,
-              top: 20,
-              bottom: MediaQuery.of(ctx).viewInsets.bottom + 20),
+            left: 20,
+            right: 20,
+            top: 20,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+          ),
           child: SingleChildScrollView(
             child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(children: [
-                    const Icon(Icons.add_box, color: green),
-                    const SizedBox(width: 10),
-                    const Text('Nouveau produit',
-                        style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: green)),
-                  ]),
-                  const SizedBox(height: 16),
-                  _inputField(nameCtrl, 'Nom du produit *', Icons.label),
-                  const SizedBox(height: 12),
-                  const Text('Catégorie',
-                      style: TextStyle(
-                          fontSize: 13, color: Colors.grey)),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: categories
-                        .where((c) => c != 'Tous')
-                        .map((cat) {
-                      final sel = selectedCat == cat;
-                      return GestureDetector(
-                        onTap: () =>
-                            setModal(() => selectedCat = cat),
-                        child: Container(
-                          width: 72,
-                          height: 72,
-                          decoration: BoxDecoration(
-                            color: sel
-                                ? green.withOpacity(0.12)
-                                : Colors.grey[100],
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                                color: sel
-                                    ? green
-                                    : Colors.transparent,
-                                width: 2),
-                          ),
-                          child: Column(
-                              mainAxisAlignment:
-                                  MainAxisAlignment.center,
-                              children: [
-                                _categoryImageWidget(cat, 32, sel),
-                                const SizedBox(height: 4),
-                                Text(cat,
-                                    style: TextStyle(
-                                        fontSize: 9,
-                                        color: sel
-                                            ? green
-                                            : Colors.grey[700],
-                                        fontWeight: sel
-                                            ? FontWeight.bold
-                                            : FontWeight.normal),
-                                    textAlign: TextAlign.center,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis),
-                              ]),
-                        ),
-                      );
-                    }).toList(),
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2)),
                   ),
-                  const SizedBox(height: 12),
-                  Row(children: [
-                    Expanded(
-                        child: _inputField(qtyCtrl, 'Quantité *',
-                            Icons.numbers,
-                            isNumber: true)),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    const Text('📦', style: TextStyle(fontSize: 22)),
                     const SizedBox(width: 10),
-                    Expanded(
-                        child: _inputField(minCtrl, 'Stock min',
-                            Icons.low_priority,
-                            isNumber: true)),
-                  ]),
-                  const SizedBox(height: 10),
-                  _inputField(priceCtrl, 'Prix (FCFA) *',
-                      Icons.attach_money,
-                      isNumber: true),
-                  const SizedBox(height: 10),
-                  Row(children: [
-                    Expanded(
-                        child: _inputField(barcodeCtrl,
-                            'Code-barres (optionnel)', Icons.qr_code)),
-                    const SizedBox(width: 8),
-                    Container(
+                    Text(
+                      existant == null ? 'Nouveau produit' : 'Modifier produit',
+                      style: _S.label(17, c: _S.emeraldMid, fw: FontWeight.w800),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                Center(
+                  child: GestureDetector(
+                    onTap: () async {
+                      _imageBytesTemp = null;
+                      _imageTempExt = null;
+                      final f = await _choisirImage();
+                      setM(() {
+                        if (f != null) imageFich = f;
+                      });
+                    },
+                    child: Container(
+                      width: 110,
+                      height: 110,
                       decoration: BoxDecoration(
-                        color: greenLight,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(
-                            color: green.withOpacity(0.3)),
+                        color: _S.emeraldFaint,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: _S.emeraldMid.withValues(alpha: 0.3), width: 2),
                       ),
-                      child: IconButton(
-                        icon: const Icon(Icons.qr_code_scanner,
-                            color: green),
-                        onPressed: () {
-                          Navigator.pop(ctx);
-                          _openScanner(prefill: barcodeCtrl);
-                        },
-                      ),
-                    ),
-                  ]),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: green,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                            vertical: 14),
-                        shape: RoundedRectangleBorder(
-                            borderRadius:
-                                BorderRadius.circular(12)),
-                      ),
-                      icon: const Icon(Icons.save),
-                      label: const Text('Enregistrer',
-                          style: TextStyle(fontSize: 16)),
-                      onPressed: () async {
-                        if (nameCtrl.text.isEmpty ||
-                            qtyCtrl.text.isEmpty ||
-                            priceCtrl.text.isEmpty) {
-                          ScaffoldMessenger.of(ctx)
-                              .showSnackBar(const SnackBar(
-                                  content:
-                                      Text('Remplissez les champs (*)'),
-                                  backgroundColor: Colors.red));
-                          return;
-                        }
-                        final product = Product(
-                          id: DateTime.now()
-                              .millisecondsSinceEpoch
-                              .toString(),
-                          name: nameCtrl.text,
-                          category: selectedCat,
-                          quantity:
-                              int.tryParse(qtyCtrl.text) ?? 0,
-                          price: double.tryParse(priceCtrl.text) ??
-                              0,
-                          minStock:
-                              int.tryParse(minCtrl.text) ?? 5,
-                          addedDate: DateTime.now(),
-                          barcode: barcodeCtrl.text.isNotEmpty
-                              ? barcodeCtrl.text
-                              : null,
-                        );
-                        Navigator.pop(ctx);
-                        await _ajouterProduit(product);
-                      },
+                      child: _imageBytesTemp != null
+                          ? ClipRRect(
+                              borderRadius: BorderRadius.circular(14),
+                              child: Image.memory(_imageBytesTemp!, fit: BoxFit.cover),
+                            )
+                          : imageFich != null
+                              ? ClipRRect(
+                                  borderRadius: BorderRadius.circular(14),
+                                  child: Image.file(imageFich!, fit: BoxFit.cover),
+                                )
+                              : imageUrl != null && imageUrl!.isNotEmpty
+                                  ? ClipRRect(
+                                      borderRadius: BorderRadius.circular(14),
+                                      child: CachedNetworkImage(imageUrl: imageUrl!, fit: BoxFit.cover),
+                                    )
+                                  : Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        imageCategorie(catSelect),
+                                        const SizedBox(height: 6),
+                                        Text('Ajouter photo', style: _S.label(11, c: _S.emeraldMid)),
+                                      ],
+                                    ),
                     ),
                   ),
-                ]),
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _showEditDialog(Product p) {
-    final nameCtrl = TextEditingController(text: p.name);
-    final qtyCtrl =
-        TextEditingController(text: p.quantity.toString());
-    final priceCtrl =
-        TextEditingController(text: p.price.toStringAsFixed(0));
-    final minCtrl =
-        TextEditingController(text: p.minStock.toString());
-    String selectedCat = p.category;
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-          borderRadius:
-              BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setModal) => Padding(
-          padding: EdgeInsets.only(
-              left: 20,
-              right: 20,
-              top: 20,
-              bottom: MediaQuery.of(ctx).viewInsets.bottom + 20),
-          child: SingleChildScrollView(
-            child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(children: [
-                    const Icon(Icons.edit, color: green),
-                    const SizedBox(width: 10),
-                    const Text('Modifier produit',
-                        style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: green)),
-                  ]),
-                  const SizedBox(height: 16),
-                  _inputField(nameCtrl, 'Nom du produit', Icons.label),
-                  const SizedBox(height: 12),
-                  const Text('Catégorie',
-                      style: TextStyle(
-                          fontSize: 13, color: Colors.grey)),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: categories
-                        .where((c) => c != 'Tous')
-                        .map((cat) {
-                      final sel = selectedCat == cat;
-                      return GestureDetector(
-                        onTap: () =>
-                            setModal(() => selectedCat = cat),
-                        child: Container(
-                          width: 72,
-                          height: 72,
-                          decoration: BoxDecoration(
-                            color: sel
-                                ? green.withOpacity(0.12)
-                                : Colors.grey[100],
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                                color: sel
-                                    ? green
-                                    : Colors.transparent,
-                                width: 2),
-                          ),
-                          child: Column(
-                              mainAxisAlignment:
-                                  MainAxisAlignment.center,
-                              children: [
-                                _categoryImageWidget(cat, 32, sel),
-                                const SizedBox(height: 4),
-                                Text(cat,
-                                    style: TextStyle(
-                                        fontSize: 9,
-                                        color: sel
-                                            ? green
-                                            : Colors.grey[700],
-                                        fontWeight: sel
-                                            ? FontWeight.bold
-                                            : FontWeight.normal),
-                                    textAlign: TextAlign.center,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis),
-                              ]),
+                ),
+                const SizedBox(height: 16),
+                Text('🏷️  Catégorie', style: _S.label(13)),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: ['Alimentaire', 'Boissons', 'Hygiène', 'Autre'].map((cat) {
+                    final sel = catSelect == cat;
+                    return GestureDetector(
+                      onTap: () => setM(() => catSelect = cat),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: sel ? _S.emeraldMid : _S.fog,
+                          borderRadius: BorderRadius.circular(20),
                         ),
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(children: [
-                    Expanded(
-                        child: _inputField(qtyCtrl, 'Quantité',
-                            Icons.numbers,
-                            isNumber: true)),
-                    const SizedBox(width: 10),
-                    Expanded(
-                        child: _inputField(minCtrl, 'Stock min',
-                            Icons.low_priority,
-                            isNumber: true)),
-                  ]),
-                  const SizedBox(height: 10),
-                  _inputField(priceCtrl, 'Prix (FCFA)',
-                      Icons.attach_money,
-                      isNumber: true),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: green,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                            vertical: 14),
-                        shape: RoundedRectangleBorder(
-                            borderRadius:
-                                BorderRadius.circular(12)),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            imageCategorie(cat, size: 14),
+                            const SizedBox(width: 6),
+                            Text(
+                              cat,
+                              style: _S.label(12,
+                                  c: sel ? Colors.white : _S.ink, fw: sel ? FontWeight.w700 : FontWeight.w500),
+                            ),
+                          ],
+                        ),
                       ),
-                      icon: const Icon(Icons.save),
-                      label: const Text('Sauvegarder',
-                          style: TextStyle(fontSize: 16)),
-                      onPressed: () async {
-                        p.name = nameCtrl.text;
-                        p.category = selectedCat;
-                        p.quantity =
-                            int.tryParse(qtyCtrl.text) ?? p.quantity;
-                        p.price =
-                            double.tryParse(priceCtrl.text) ?? p.price;
-                        p.minStock =
-                            int.tryParse(minCtrl.text) ?? p.minStock;
-                        Navigator.pop(ctx);
-                        await _modifierProduit(p);
-                      },
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 14),
+                _champ(nomCtrl, 'Nom du produit *', Icons.label),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(child: _champ(prixCtrl, 'Prix (F)', Icons.payments, nb: true)),
+                    const SizedBox(width: 10),
+                    Expanded(child: _champ(qteCtrl, 'Quantité', Icons.inventory, nb: true)),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(child: _champ(minCtrl, 'Stock min', Icons.warning_amber, nb: true)),
+                    const SizedBox(width: 10),
+                    Expanded(child: _champBarcode(barcodeCtrl, ctx)),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _S.emeraldMid,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                     ),
+                    icon: loadingImg
+                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                        : const Icon(Icons.save),
+                    label: Text(
+                      loadingImg ? 'Upload…' : (existant == null ? 'Enregistrer' : 'Sauvegarder'),
+                      style: _S.label(15, c: Colors.white, fw: FontWeight.w700),
+                    ),
+                    onPressed: loadingImg
+                        ? null
+                        : () async {
+                            if (nomCtrl.text.isEmpty || prixCtrl.text.isEmpty) {
+                              ScaffoldMessenger.of(ctx).showSnackBar(
+                                const SnackBar(content: Text('Nom et prix obligatoires'), backgroundColor: Colors.red),
+                              );
+                              return;
+                            }
+                            setM(() => loadingImg = true);
+                            final id = existant?.id ?? DateTime.now().millisecondsSinceEpoch.toString();
+                            String? finalUrl = imageUrl;
+                            if (kIsWeb && _imageBytesTemp != null) {
+                              finalUrl = await _uploadImageBytes(_imageBytesTemp!, id, _imageTempExt ?? 'jpg');
+                            } else if (!kIsWeb && imageFich != null) {
+                              finalUrl = await _uploadImage(imageFich!, id);
+                            }
+                            final p = Product(
+                              id: id,
+                              name: nomCtrl.text.trim(),
+                              category: catSelect,
+                              quantity: int.tryParse(qteCtrl.text) ?? 0,
+                              price: double.tryParse(prixCtrl.text) ?? 0,
+                              minStock: int.tryParse(minCtrl.text) ?? 5,
+                              barcode: barcodeCtrl.text.isEmpty ? null : barcodeCtrl.text,
+                              imageUrl: finalUrl,
+                              addedDate: existant?.addedDate ?? DateTime.now(),
+                            );
+                            Navigator.pop(ctx);
+                            if (existant == null) await _ajouterProduit(p);
+                            else await _modifierProduit(p);
+                          },
                   ),
-                ]),
+                ),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 
-  void _showAddStockDialog(Product p) {
-    final ctrl = TextEditingController();
+  void _dialogAjusterQuantite(Product p) {
+    final ctrl = TextEditingController(text: '${p.quantity}');
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16)),
-        title: Row(children: [
-          _categoryImageWidget(p.category, 24, false),
-          const SizedBox(width: 8),
-          const Text('Ajouter stock',
-              style: TextStyle(color: green)),
-        ]),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text('${p.name}\nStock actuel : ${p.quantity}',
-              style: const TextStyle(fontSize: 14)),
-          const SizedBox(height: 12),
-          _inputField(ctrl, 'Quantité à ajouter', Icons.add,
-              isNumber: true),
-        ]),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: Row(
+          children: [
+            _buildImageProduit(p),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(p.name, style: _S.label(14, fw: FontWeight.w800)),
+                  Text('Stock : ${p.quantity}', style: _S.label(12, c: _S.slate)),
+                ],
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Nouvelle quantité :', style: _S.label(14)),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                GestureDetector(
+                  onTap: () {
+                    final q = int.tryParse(ctrl.text) ?? 0;
+                    if (q > 0) ctrl.text = '${q - 1}';
+                  },
+                  child: Container(width: 40, height: 40,
+                      decoration: BoxDecoration(color: _S.coralLight, borderRadius: BorderRadius.circular(10)),
+                      child: Icon(Icons.remove, color: _S.coral)),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: TextField(
+                    controller: ctrl,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    textAlign: TextAlign.center,
+                    style: _S.label(22, fw: FontWeight.w800),
+                    decoration: InputDecoration(
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: _S.emeraldMid, width: 2)),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                GestureDetector(
+                  onTap: () {
+                    final q = int.tryParse(ctrl.text) ?? 0;
+                    ctrl.text = '${q + 1}';
+                  },
+                  child: Container(width: 40, height: 40,
+                      decoration: BoxDecoration(color: _S.emeraldFaint, borderRadius: BorderRadius.circular(10)),
+                      child: Icon(Icons.add, color: _S.emeraldMid)),
+                ),
+              ],
+            ),
+          ],
+        ),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Annuler')),
+          TextButton(onPressed: () => Navigator.pop(context), child: Text('Annuler', style: _S.label(13, c: _S.slate))),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(
-                backgroundColor: green,
-                foregroundColor: Colors.white),
+            style: ElevatedButton.styleFrom(backgroundColor: _S.emeraldMid, foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
             onPressed: () async {
-              final add = int.tryParse(ctrl.text) ?? 0;
-              if (add > 0) {
-                p.quantity += add;
-                Navigator.pop(context);
-                await _modifierProduit(p);
-              }
+              final nQte = int.tryParse(ctrl.text) ?? p.quantity;
+              Navigator.pop(context);
+              await _sb.from('products').update({'quantity': nQte}).eq('id', p.id);
+              _toast('✅ Stock mis à jour : $nQte', ok: true);
             },
-            child: const Text('Ajouter'),
+            child: const Text('Mettre à jour'),
           ),
         ],
       ),
     );
   }
 
-  void _confirmDelete(Product p) {
+  void _scannerBarcode({TextEditingController? barcodeCtrl}) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.black,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => SizedBox(
+        height: MediaQuery.of(context).size.height * 0.65,
+        child: Stack(
+          children: [
+            MobileScanner(
+              onDetect: (capture) {
+                final code = capture.barcodes.first.rawValue;
+                if (code == null) return;
+                Navigator.pop(context);
+                if (barcodeCtrl != null) {
+                  barcodeCtrl.text = code;
+                } else {
+                  setState(() {
+                    _recherche = code;
+                    _searchCtrl.text = code;
+                  });
+                  final found = _products.where((p) => p.barcode == code).toList();
+                  if (found.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Produit non trouvé : $code'),
+                        backgroundColor: _S.orange,
+                        action: SnackBarAction(
+                          label: 'Ajouter',
+                          textColor: Colors.white,
+                          onPressed: () => _ouvrirFormulaire(),
+                        ),
+                      ),
+                    );
+                  }
+                }
+              },
+            ),
+            Center(
+              child: Container(
+                width: 260,
+                height: 160,
+                decoration: BoxDecoration(border: Border.all(color: _S.emeraldGlow, width: 3), borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+            Positioned(
+              bottom: 20,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Text('Pointez vers le code-barres', style: _S.label(14, c: Colors.white.withValues(alpha: 0.8))),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _confirmerSuppression(Product p) {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16)),
-        title: const Text('Supprimer produit',
-            style: TextStyle(color: Colors.red)),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          _categoryImageWidget(p.category, 48, false),
-          const SizedBox(height: 12),
-          Text(
-              'Supprimer "${p.name}" ?\nCette action est irréversible.'),
-        ]),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: Row(
+          children: [
+            const Text('🗑️', style: TextStyle(fontSize: 22)),
+            const SizedBox(width: 8),
+            Text('Supprimer', style: _S.label(16, c: _S.coral)),
+          ],
+        ),
+        content: Text('Supprimer "${p.name}" ?\nCette action est irréversible.'),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Annuler')),
+          TextButton(onPressed: () => Navigator.pop(context), child: Text('Annuler', style: _S.label(13, c: _S.slate))),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red,
-                foregroundColor: Colors.white),
+            style: ElevatedButton.styleFrom(backgroundColor: _S.coral, foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
             onPressed: () async {
               Navigator.pop(context);
-              await _supprimerProduit(p.id);
+              await _supprimerProduit(p);
             },
             child: const Text('Supprimer'),
           ),
@@ -1674,138 +1319,147 @@ class _StockPageState extends State<StockPage> {
     );
   }
 
-  // ─────────────────────────────────────────
-  // HELPERS
-  // ─────────────────────────────────────────
-
-  Widget _categoryImageWidget(String category, double size, bool selected) {
-    final paths = {
+  Widget imageCategorie(String cat, {double size = 40}) {
+    const map = {
       'Alimentaire': 'lib/assets/categories/aliment.jpg',
       'Boissons': 'lib/assets/categories/boisson.jpg',
       'Hygiène': 'lib/assets/categories/hygienne.jpg',
-      'Autre': 'lib/assets/categories/autre.jpg',
     };
-    final emojis = {
-      'Alimentaire': '🍞',
-      'Boissons': '🥤',
-      'Hygiène': '🧴',
-      'Autre': '📦',
-    };
-    final path = paths[category];
-    if (path == null) {
-      return Text(emojis[category] ?? '📦',
-          style: TextStyle(fontSize: size * 0.85));
-    }
-    return Image.asset(path,
+    final path = map[cat] ?? 'lib/assets/categories/produit.png';
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(size / 3),
+      child: Image.asset(
+        path,
         width: size,
         height: size,
         fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => Text(emojis[category] ?? '📦',
-            style: TextStyle(fontSize: size * 0.85)));
-  }
-
-  Widget _inputField(TextEditingController ctrl, String label, IconData icon,
-      {bool isNumber = false}) {
-    return TextFormField(
-      controller: ctrl,
-      keyboardType:
-          isNumber ? TextInputType.number : TextInputType.text,
-      inputFormatters:
-          isNumber ? [FilteringTextInputFormatter.digitsOnly] : null,
-      decoration: InputDecoration(
-        labelText: label,
-        prefixIcon: Icon(icon, color: green, size: 20),
-        border:
-            OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: green, width: 2),
+        errorBuilder: (_, __, ___) => Text(
+          cat == 'Alimentaire' ? '🍞' : cat == 'Boissons' ? '🥤' : cat == 'Hygiène' ? '🧴' : '📦',
+          style: TextStyle(fontSize: size * 0.6),
         ),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
       ),
     );
   }
 
-  void _toast(String msg, {required bool success}) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg),
-      backgroundColor: success ? green : Colors.red,
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      margin: const EdgeInsets.all(16),
-    ));
+  Widget _champ(TextEditingController c, String label, IconData icon, {bool nb = false}) {
+    return TextFormField(
+      controller: c,
+      keyboardType: nb ? TextInputType.number : TextInputType.text,
+      inputFormatters: nb ? [FilteringTextInputFormatter.digitsOnly] : null,
+      style: _S.label(14),
+      decoration: InputDecoration(
+        labelText: label,
+        prefixIcon: Icon(icon, color: _S.emeraldMid, size: 20),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: _S.emeraldMid, width: 2)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      ),
+    );
   }
 
-  String _formatDate(DateTime d) =>
-      '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
+  Widget _champBarcode(TextEditingController c, BuildContext ctx) {
+    return TextFormField(
+      controller: c,
+      style: _S.label(14),
+      decoration: InputDecoration(
+        labelText: 'Code-barres',
+        prefixIcon: Icon(Icons.qr_code, color: _S.emeraldMid, size: 20),
+        suffixIcon: IconButton(
+          icon: Icon(Icons.qr_code_scanner, color: _S.emeraldMid),
+          onPressed: () {
+            Navigator.pop(ctx);
+            _scannerBarcode(barcodeCtrl: c);
+          },
+        ),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: _S.emeraldMid, width: 2)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      ),
+    );
+  }
 
-  String _formatPrice(double price) {
-    if (price >= 1000000)
-      return '${(price / 1000000).toStringAsFixed(1)}M';
-    if (price >= 1000) return '${(price / 1000).toStringAsFixed(0)}k';
-    return price.toStringAsFixed(0);
+  void _toast(String msg, {required bool ok}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: ok ? _S.emeraldMid : _S.coral,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(16),
+      ),
+    );
+  }
+
+  String _fmtPrix(double p) {
+    if (p >= 1000000) return '${(p / 1000000).toStringAsFixed(1)}M';
+    if (p >= 1000) return '${(p / 1000).toStringAsFixed(0)}k';
+    return p.toStringAsFixed(0);
   }
 }
 
-// ─────────────────────────────────────────
-// DELEGATE DE RECHERCHE (mode sélection)
-// ─────────────────────────────────────────
-class _ProductSearchDelegate extends SearchDelegate<void> {
-  final List<Product> products;
-  final Map<String, int> selectionQty;
-  final Color green;
-  final Function(String id, int qty) onUpdate;
-
-  _ProductSearchDelegate(
-      this.products, this.selectionQty, this.green, this.onUpdate);
-
+// ========== WIDGETS UTILITAIRES (mode normal) ==========
+class _StockBadge extends StatelessWidget {
+  final Product p;
+  final Color couleur;
+  const _StockBadge({required this.p, required this.couleur});
   @override
-  List<Widget> buildActions(BuildContext context) =>
-      [IconButton(icon: const Icon(Icons.clear), onPressed: () => query = '')];
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+    decoration: BoxDecoration(color: couleur.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(20)),
+    child: Row(mainAxisSize: MainAxisSize.min, children: [
+      Icon(p.stockVide ? Icons.remove_circle : p.stockFaible ? Icons.warning : Icons.check_circle,
+          size: 10, color: couleur),
+      const SizedBox(width: 3),
+      Text(p.stockVide ? 'VIDE' : p.stockFaible ? 'Faible' : 'OK',
+          style: TextStyle(fontSize: 10, color: couleur, fontWeight: FontWeight.w700)),
+    ]),
+  );
+}
 
+class _QteControls extends StatelessWidget {
+  final Product p;
+  final Color couleur;
+  final void Function(int) onAjuster;
+  const _QteControls({required this.p, required this.couleur, required this.onAjuster});
   @override
-  Widget buildLeading(BuildContext context) => IconButton(
-      icon: const Icon(Icons.arrow_back),
-      onPressed: () => close(context, null));
+  Widget build(BuildContext context) => Container(
+    decoration: BoxDecoration(color: _S.fog, borderRadius: BorderRadius.circular(10)),
+    child: Row(mainAxisSize: MainAxisSize.min, children: [
+      GestureDetector(
+        onTap: () => onAjuster(-1),
+        onLongPress: () => onAjuster(-10),
+        child: Container(width: 30, height: 30,
+          decoration: BoxDecoration(color: p.quantity > 0 ? _S.coralLight : _S.fog, borderRadius: BorderRadius.circular(8)),
+          child: Icon(Icons.remove, size: 15, color: p.quantity > 0 ? _S.coral : _S.slate),
+        ),
+      ),
+      Padding(padding: const EdgeInsets.symmetric(horizontal: 10),
+        child: Text('${p.quantity}', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: couleur)),
+      ),
+      GestureDetector(
+        onTap: () => onAjuster(1),
+        onLongPress: () => onAjuster(10),
+        child: Container(width: 30, height: 30,
+          decoration: BoxDecoration(color: _S.emeraldFaint, borderRadius: BorderRadius.circular(8)),
+          child: Icon(Icons.add, size: 15, color: _S.emeraldMid),
+        ),
+      ),
+    ]),
+  );
+}
 
+class _SourceTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final Color bg, iconColor;
+  final VoidCallback onTap;
+  const _SourceTile(this.icon, this.title, this.bg, this.iconColor, this.onTap);
   @override
-  Widget buildResults(BuildContext context) => _buildList();
-
-  @override
-  Widget buildSuggestions(BuildContext context) => _buildList();
-
-  Widget _buildList() {
-    final results = products
-        .where((p) => p.name.toLowerCase().contains(query.toLowerCase()))
-        .toList();
-    return ListView.builder(
-      itemCount: results.length,
-      itemBuilder: (_, i) {
-        final p = results[i];
-        final qty = selectionQty[p.id] ?? 0;
-        return ListTile(
-          title: Text(p.name),
-          subtitle:
-              Text('${p.price.toStringAsFixed(0)} FCFA – dispo: ${p.quantity}'),
-          trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-            if (qty > 0) ...[
-              IconButton(
-                icon: const Icon(Icons.remove_circle, color: Colors.red),
-                onPressed: () => onUpdate(p.id, qty - 1),
-              ),
-              Text('$qty',
-                  style: TextStyle(
-                      fontWeight: FontWeight.bold, color: green, fontSize: 16)),
-            ],
-            IconButton(
-              icon: Icon(Icons.add_circle, color: green),
-              onPressed:
-                  qty < p.quantity ? () => onUpdate(p.id, qty + 1) : null,
-            ),
-          ]),
-        );
-      },
-    );
-  }
+  Widget build(BuildContext context) => ListTile(
+    onTap: onTap,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: Colors.grey.shade200)),
+    leading: Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(10)), child: Icon(icon, color: iconColor, size: 22)),
+    title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+  );
 }

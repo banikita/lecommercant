@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:sqflite/sqflite.dart';
 import 'package:le_commercant/database/app_database.dart';
-import 'dashbord.dart'; 
+import 'dashbord.dart';
 import 'package:flutter/foundation.dart';
 
 class RegisterPage extends StatefulWidget {
@@ -34,9 +35,7 @@ class _RegisterPageState extends State<RegisterPage>
 
   final _db = AppDatabase.instance;
 
-  // --- Palette de couleurs ---
   static const _green = Color(0xFF0F6E56);
-  static const _greenDark = Color(0xFF085041);
   static const _greenLight = Color(0xFFE1F5EE);
   static const _red = Color(0xFFA32D2D);
   static const _amber = Color(0xFF854F0B);
@@ -83,7 +82,6 @@ class _RegisterPageState extends State<RegisterPage>
     super.dispose();
   }
 
-  // --- Validateurs ---
   String? _req(String? v, String champ) =>
       (v == null || v.trim().isEmpty) ? '$champ requis' : null;
 
@@ -146,109 +144,145 @@ class _RegisterPageState extends State<RegisterPage>
     }
   }
 
-  // --- ACTION PRINCIPALE CORRIGÉE ---
   Future<void> _inscrire() async {
-  setState(() => _isLoading = true);
+    setState(() => _isLoading = true);
 
-  try {
-    final prenom = _prenomCtrl.text.trim();
-    final nom = _nomCtrl.text.trim();
-    final tel = _telephoneCtrl.text.trim();
-    final boutique = _boutiqueCtrl.text.trim();
-    final ville = _villeCtrl.text.trim();
-    final pinSaisi = _pinCtrl.text;
+    try {
+      final prenom = _prenomCtrl.text.trim();
+      final nom = _nomCtrl.text.trim();
+      final tel = _telephoneCtrl.text.trim();
+      final boutique = _boutiqueCtrl.text.trim();
+      final ville = _villeCtrl.text.trim();
+      final pinSaisi = _pinCtrl.text;
+      final pinHashe = _db.hashPin(pinSaisi, tel);
 
-    // 1. Hash du PIN
-    final String pinHashe = _db.hashPin(pinSaisi);
+      final supabase = Supabase.instance.client;
+      final response = await supabase.from('commercants').insert({
+        'prenom': prenom,
+        'nom': nom,
+        'telephone': tel,
+        'nom_boutique': boutique,
+        'ville': ville,
+        'pin_hash': pinHashe,
+      }).select().single();
 
-    // 2. Supabase (OK sur Web)
-    final supabase = Supabase.instance.client;
-    final response = await supabase.from('commercants').insert({
-      'prenom': prenom,
-      'nom': nom,
-      'telephone': tel,
-      'nom_boutique': boutique,
-      'ville': ville,
-      'pin_hash': pinHashe,
-    }).select().single();
+      final int supabaseId = response['id'];
 
-    final int supabaseId = response['id'];
+      if (!kIsWeb) {
+        try {
+          // ✅ CORRECTION 1 : On récupère la DB (ce qui l'initialise si besoin)
+          final db = await _db.database;
 
-    // ✅ 3. SQLite UNIQUEMENT hors Web
-    if (!kIsWeb) {
-      await _db.inscrire(
-        prenom: prenom,
-        nom: nom,
-        telephone: tel,
-        nomBoutique: boutique,
-        ville: ville,
-        pin: pinSaisi,
-      );
+          // ✅ CORRECTION 2 : On s'assure que les tables existent avant d'insérer
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS commercants (
+              id INTEGER PRIMARY KEY,
+              prenom TEXT NOT NULL,
+              nom TEXT NOT NULL,
+              telephone TEXT NOT NULL UNIQUE,
+              nom_boutique TEXT NOT NULL,
+              ville TEXT NOT NULL,
+              pin_hash TEXT NOT NULL,
+              created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS sessions (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              commercant_id INTEGER NOT NULL REFERENCES commercants(id) ON DELETE CASCADE,
+              token TEXT NOT NULL,
+              is_active INTEGER NOT NULL DEFAULT 1,
+              tentatives_pin INTEGER NOT NULL DEFAULT 0,
+              derniere_activite TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+          ''');
 
-      await _db.ouvrirSession(supabaseId);
-    }
+          // ✅ CORRECTION 3 : Insertion sécurisée avec conflictAlgorithm
+          await db.insert(
+            'commercants',
+            {
+              'id': supabaseId,
+              'prenom': prenom,
+              'nom': nom,
+              'telephone': tel,
+              'nom_boutique': boutique,
+              'ville': ville,
+              'pin_hash': pinHashe,
+            },
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
 
-    // 4. SharedPreferences (OK sur Web)
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('is_registered', true);
-    await prefs.setBool('is_logged_in', true);
-    await prefs.setInt('commercant_id', supabaseId);
-    await prefs.setString('nom_commercant', '$prenom $nom');
-    await prefs.setString('nom_boutique', boutique);
-    await prefs.setString('ville', ville);
+          await _db.ouvrirSession(supabaseId);
+        } catch (localError) {
+          debugPrint("ERREUR INSERTION LOCALE : $localError");
+          // ✅ On affiche juste un avertissement, l'inscription Supabase a réussi
+          _toast('Inscription réussie, synchronisation locale en attente.',
+              err: false);
+        }
+      }
 
-    if (!mounted) return;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('is_registered', true);
+      await prefs.setBool('is_logged_in', true);
+      await prefs.setInt('commercant_id', supabaseId);
+      await prefs.setString('nom_commercant', '$prenom $nom');
+      await prefs.setString('nom_boutique', boutique);
+      await prefs.setString('ville', ville);
 
-    // 5. Navigation
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(
-        builder: (_) => DashboardPage(
-          commercantId: supabaseId,
-          nomCommercant: '$prenom $nom',
-          nomBoutique: boutique,
-          ville: ville,
+      if (!mounted) return;
+
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => DashboardPage(
+            commercantId: supabaseId,
+            nomCommercant: '$prenom $nom',
+            nomBoutique: boutique,
+            ville: ville,
+          ),
         ),
-      ),
-    );
-  } catch (e) {
-    setState(() => _isLoading = false);
-
-    // 👇 affiche la vraie erreur (important pour debug)
-    debugPrint("ERREUR INSCRIPTION: $e");
-
-    _toast('Erreur lors de l\'inscription.', err: true);
+      );
+    } catch (e) {
+      setState(() => _isLoading = false);
+      debugPrint("ERREUR INSCRIPTION GLOBALE : $e");
+      _toast('Erreur lors de l\'inscription. Vérifiez votre connexion.',
+          err: true);
+    }
   }
-}
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
       body: SafeArea(
-          child: Column(children: [
-        _buildHeader(),
-        Expanded(
+        child: Column(children: [
+          _buildHeader(),
+          Expanded(
             child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: Form(
-                    key: _formKey,
-                    child: FadeTransition(
-                        opacity: _fadeAnim,
-                        child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const SizedBox(height: 24),
-                              _buildEtapeHeader(),
-                              const SizedBox(height: 24),
-                              _buildContenu(),
-                              const SizedBox(height: 32),
-                            ]))))),
-        _buildBoutons(),
-      ])),
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Form(
+                key: _formKey,
+                child: FadeTransition(
+                  opacity: _fadeAnim,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 24),
+                      _buildEtapeHeader(),
+                      const SizedBox(height: 24),
+                      _buildContenu(),
+                      const SizedBox(height: 32),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          _buildBoutons(),
+        ]),
+      ),
     );
   }
-
-  // --- Widgets de construction (Design) ---
 
   Widget _buildHeader() {
     return Padding(
@@ -265,12 +299,16 @@ class _RegisterPageState extends State<RegisterPage>
           const SizedBox(width: 10),
           const Text('Le Commerçant',
               style: TextStyle(
-                  color: _green, fontSize: 20, fontWeight: FontWeight.w800)),
+                  color: _green,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800)),
           const Spacer(),
           Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
               decoration: BoxDecoration(
-                  color: _greenLight, borderRadius: BorderRadius.circular(20)),
+                  color: _greenLight,
+                  borderRadius: BorderRadius.circular(20)),
               child: const Row(children: [
                 Icon(Icons.fiber_new_rounded, color: _green, size: 14),
                 SizedBox(width: 4),
@@ -283,45 +321,53 @@ class _RegisterPageState extends State<RegisterPage>
         ]),
         const SizedBox(height: 22),
         Row(
-            children: List.generate(3, (i) {
-          final actif = i == _etape;
-          final fait = i < _etape;
-          return Expanded(
+          children: List.generate(3, (i) {
+            final actif = i == _etape;
+            final fait = i < _etape;
+            return Expanded(
               child: Row(children: [
-            if (i > 0)
-              Expanded(child: Container(height: 2, color: fait ? _green : _greyMid)),
-            Column(children: [
-              AnimatedContainer(
-                  duration: const Duration(milliseconds: 300),
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                      color: fait
-                          ? _green
-                          : actif
-                              ? _greenLight
-                              : _grey,
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                          color: actif || fait ? _green : _border,
-                          width: actif ? 2 : 1)),
-                  child: Center(
-                      child: fait
-                          ? const Icon(Icons.check_rounded,
-                              color: Colors.white, size: 18)
-                          : Icon(_icons[i],
-                              color: actif ? _green : _hint, size: 16))),
-              const SizedBox(height: 4),
-              Text(_labels[i],
-                  style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      color: actif || fait ? _green : _hint)),
-            ]),
-            if (i < 2)
-              Expanded(child: Container(height: 2, color: i < _etape ? _green : _greyMid)),
-          ]));
-        })),
+                if (i > 0)
+                  Expanded(
+                      child: Container(
+                          height: 2, color: fait ? _green : _greyMid)),
+                Column(children: [
+                  AnimatedContainer(
+                      duration: const Duration(milliseconds: 300),
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                          color: fait
+                              ? _green
+                              : actif
+                                  ? _greenLight
+                                  : _grey,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                              color: actif || fait ? _green : _border,
+                              width: actif ? 2 : 1)),
+                      child: Center(
+                          child: fait
+                              ? const Icon(Icons.check_rounded,
+                                  color: Colors.white, size: 18)
+                              : Icon(_icons[i],
+                                  color: actif ? _green : _hint,
+                                  size: 16))),
+                  const SizedBox(height: 4),
+                  Text(_labels[i],
+                      style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: actif || fait ? _green : _hint)),
+                ]),
+                if (i < 2)
+                  Expanded(
+                      child: Container(
+                          height: 2,
+                          color: i < _etape ? _green : _greyMid)),
+              ]),
+            );
+          }),
+        ),
         const SizedBox(height: 16),
       ]),
     );
@@ -334,27 +380,35 @@ class _RegisterPageState extends State<RegisterPage>
               width: 30,
               height: 30,
               decoration: BoxDecoration(
-                  color: _greenLight, borderRadius: BorderRadius.circular(8)),
+                  color: _greenLight,
+                  borderRadius: BorderRadius.circular(8)),
               child: Icon(_icons[_etape], color: _green, size: 16)),
           const SizedBox(width: 10),
           Text('Étape ${_etape + 1}/3',
               style: const TextStyle(
-                  color: _green, fontSize: 12, fontWeight: FontWeight.w700)),
+                  color: _green,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700)),
         ]),
         const SizedBox(height: 10),
         Text(_titres[_etape],
             style: const TextStyle(
                 color: _text, fontSize: 22, fontWeight: FontWeight.w800)),
         const SizedBox(height: 4),
-        Text(_subs[_etape], style: const TextStyle(color: _hint, fontSize: 13)),
+        Text(_subs[_etape],
+            style: const TextStyle(color: _hint, fontSize: 13)),
       ]);
 
   Widget _buildContenu() {
     switch (_etape) {
-      case 0: return _etape0();
-      case 1: return _etape1();
-      case 2: return _etape2();
-      default: return const SizedBox();
+      case 0:
+        return _etape0();
+      case 1:
+        return _etape1();
+      case 2:
+        return _etape2();
+      default:
+        return const SizedBox();
     }
   }
 
@@ -372,12 +426,16 @@ class _RegisterPageState extends State<RegisterPage>
         _champTelephone(),
         const SizedBox(height: 14),
         _infoBox(Icons.info_outline_rounded,
-            'Votre numéro servira à vous identifier.', _amberLight, _amber, const Color(0xFFEF9F27)),
+            'Votre numéro servira à vous identifier.',
+            _amberLight,
+            _amber,
+            const Color(0xFFEF9F27)),
       ]);
 
   Widget _etape1() => Column(children: [
         _champ(_boutiqueCtrl, 'Nom de la boutique', Icons.storefront_outlined,
-            label: 'Nom boutique', validator: (v) => _req(v, 'Nom boutique')),
+            label: 'Nom boutique',
+            validator: (v) => _req(v, 'Nom boutique')),
         const SizedBox(height: 12),
         _champ(_villeCtrl, 'Ex: Touba, Dakar...', Icons.location_on_outlined,
             label: 'Ville / Quartier', validator: (v) => _req(v, 'Ville')),
@@ -391,14 +449,20 @@ class _RegisterPageState extends State<RegisterPage>
               const Row(children: [
                 Icon(Icons.storefront_rounded, color: Colors.white, size: 14),
                 SizedBox(width: 6),
-                Text('Aperçu', style: TextStyle(color: Colors.white70, fontSize: 11)),
+                Text('Aperçu',
+                    style: TextStyle(color: Colors.white70, fontSize: 11)),
               ]),
               const SizedBox(height: 10),
               ValueListenableBuilder(
                   valueListenable: _boutiqueCtrl,
                   builder: (_, __, ___) => Text(
-                      _boutiqueCtrl.text.isEmpty ? 'Ma Boutique' : _boutiqueCtrl.text,
-                      style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w800))),
+                      _boutiqueCtrl.text.isEmpty
+                          ? 'Ma Boutique'
+                          : _boutiqueCtrl.text,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800))),
             ])),
       ]);
 
@@ -409,7 +473,8 @@ class _RegisterPageState extends State<RegisterPage>
                 height: 70,
                 decoration: const BoxDecoration(
                     color: _greenLight, shape: BoxShape.circle),
-                child: const Icon(Icons.lock_rounded, color: _green, size: 32))),
+                child:
+                    const Icon(Icons.lock_rounded, color: _green, size: 32))),
         const SizedBox(height: 18),
         _champ(_pinCtrl, '• • • •', Icons.lock_outline_rounded,
             label: 'Code PIN (4 chiffres)',
@@ -419,8 +484,12 @@ class _RegisterPageState extends State<RegisterPage>
             formatters: [FilteringTextInputFormatter.digitsOnly],
             validator: _valPin,
             suffix: IconButton(
-                icon: Icon(_obscurePin ? Icons.visibility_off_outlined : Icons.visibility_outlined,
-                    color: _hint, size: 20),
+                icon: Icon(
+                    _obscurePin
+                        ? Icons.visibility_off_outlined
+                        : Icons.visibility_outlined,
+                    color: _hint,
+                    size: 20),
                 onPressed: () => setState(() => _obscurePin = !_obscurePin))),
         const SizedBox(height: 12),
         _champ(_confirmPinCtrl, '• • • •', Icons.lock_outline_rounded,
@@ -431,9 +500,14 @@ class _RegisterPageState extends State<RegisterPage>
             formatters: [FilteringTextInputFormatter.digitsOnly],
             validator: _valConfirm,
             suffix: IconButton(
-                icon: Icon(_obscureConfirm ? Icons.visibility_off_outlined : Icons.visibility_outlined,
-                    color: _hint, size: 20),
-                onPressed: () => setState(() => _obscureConfirm = !_obscureConfirm))),
+                icon: Icon(
+                    _obscureConfirm
+                        ? Icons.visibility_off_outlined
+                        : Icons.visibility_outlined,
+                    color: _hint,
+                    size: 20),
+                onPressed: () =>
+                    setState(() => _obscureConfirm = !_obscureConfirm))),
       ]);
 
   Widget _buildBoutons() => Container(
@@ -481,11 +555,17 @@ class _RegisterPageState extends State<RegisterPage>
                         child: Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Text(_etape < 2 ? 'Continuer' : "S'inscrire",
+                              Text(
+                                  _etape < 2 ? 'Continuer' : "S'inscrire",
                                   style: const TextStyle(
-                                      fontSize: 16, fontWeight: FontWeight.w700)),
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700)),
                               const SizedBox(width: 8),
-                              Icon(_etape < 2 ? Icons.arrow_forward_rounded : Icons.check_rounded, size: 20),
+                              Icon(
+                                  _etape < 2
+                                      ? Icons.arrow_forward_rounded
+                                      : Icons.check_rounded,
+                                  size: 20),
                             ])))),
       ]));
 
@@ -494,7 +574,8 @@ class _RegisterPageState extends State<RegisterPage>
           color: _grey, borderRadius: BorderRadius.circular(14)),
       child: Row(children: [
         Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
             decoration: const BoxDecoration(
                 color: _greenLight,
                 borderRadius: BorderRadius.only(
@@ -505,7 +586,9 @@ class _RegisterPageState extends State<RegisterPage>
               SizedBox(width: 6),
               Text('+221',
                   style: TextStyle(
-                      color: _green, fontSize: 14, fontWeight: FontWeight.w700)),
+                      color: _green,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700)),
             ])),
         Expanded(
             child: TextFormField(
@@ -520,8 +603,8 @@ class _RegisterPageState extends State<RegisterPage>
                     hintText: '77 000 00 00',
                     hintStyle: TextStyle(color: _hint, fontSize: 14),
                     border: InputBorder.none,
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 14, vertical: 16)))),
+                    contentPadding: EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 16)))),
       ]));
 
   Widget _champ(TextEditingController ctrl, String hint, IconData icon,
@@ -562,9 +645,10 @@ class _RegisterPageState extends State<RegisterPage>
                   borderSide: BorderSide.none),
               focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(14),
-                  borderSide: const BorderSide(color: _green, width: 1.5)),
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 16))),
+                  borderSide:
+                      const BorderSide(color: _green, width: 1.5)),
+              contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16, vertical: 16))),
     ]);
   }
 
@@ -588,7 +672,8 @@ class _RegisterPageState extends State<RegisterPage>
       content: Text(msg, style: const TextStyle(fontSize: 13)),
       backgroundColor: err ? _red : _green,
       behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       margin: const EdgeInsets.all(16),
     ));
   }
