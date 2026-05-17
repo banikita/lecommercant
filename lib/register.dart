@@ -6,6 +6,8 @@ import 'package:sqflite/sqflite.dart';
 import 'package:le_commercant/database/app_database.dart';
 import 'dashbord.dart';
 import 'package:flutter/foundation.dart';
+import 'dart:convert';
+import 'package:crypto/crypto.dart';
 
 class RegisterPage extends StatefulWidget {
   const RegisterPage({super.key});
@@ -82,6 +84,13 @@ class _RegisterPageState extends State<RegisterPage>
     super.dispose();
   }
 
+  // ✅ Hachage SHA‑256 pur (sans sel)
+  String _hashPin(String pin) {
+    final bytes = utf8.encode(pin.trim());
+    final digest = sha256.convert(bytes);
+    return digest.toString();
+  }
+
   String? _req(String? v, String champ) =>
       (v == null || v.trim().isEmpty) ? '$champ requis' : null;
 
@@ -154,7 +163,9 @@ class _RegisterPageState extends State<RegisterPage>
       final boutique = _boutiqueCtrl.text.trim();
       final ville = _villeCtrl.text.trim();
       final pinSaisi = _pinCtrl.text;
-      final pinHashe = _db.hashPin(pinSaisi, tel);
+
+      // ✅ Hash du PIN (SHA‑256 pur)
+      final pinHashe = _hashPin(pinSaisi);
 
       final supabase = Supabase.instance.client;
       final response = await supabase.from('commercants').insert({
@@ -170,10 +181,8 @@ class _RegisterPageState extends State<RegisterPage>
 
       if (!kIsWeb) {
         try {
-          // ✅ CORRECTION 1 : On récupère la DB (ce qui l'initialise si besoin)
           final db = await _db.database;
 
-          // ✅ CORRECTION 2 : On s'assure que les tables existent avant d'insérer
           await db.execute('''
             CREATE TABLE IF NOT EXISTS commercants (
               id INTEGER PRIMARY KEY,
@@ -197,7 +206,6 @@ class _RegisterPageState extends State<RegisterPage>
             )
           ''');
 
-          // ✅ CORRECTION 3 : Insertion sécurisée avec conflictAlgorithm
           await db.insert(
             'commercants',
             {
@@ -215,7 +223,6 @@ class _RegisterPageState extends State<RegisterPage>
           await _db.ouvrirSession(supabaseId);
         } catch (localError) {
           debugPrint("ERREUR INSERTION LOCALE : $localError");
-          // ✅ On affiche juste un avertissement, l'inscription Supabase a réussi
           _toast('Inscription réussie, synchronisation locale en attente.',
               err: false);
         }

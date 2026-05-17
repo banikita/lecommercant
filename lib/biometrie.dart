@@ -42,8 +42,6 @@ class _BiometriePageState extends State<BiometriePage> {
   @override
   void initState() {
     super.initState();
-    // ✅ Affiche l'ID du commerçant dans la console
-    print("=== BiometriePage: ID commerçant reçu = ${widget.commercantId} ===");
     _loadPreferences();
     _verifierOuInitialiserPin();
     _checkBiometricSupport();
@@ -81,7 +79,8 @@ class _BiometriePageState extends State<BiometriePage> {
             .update({'pin_hash': hash, 'tentatives_connexion': 0})
             .eq('id', widget.commercantId);
         if (mounted) {
-          _showSnackBar('PIN par défaut créé (0000). Veuillez le modifier.');
+          _showSnackBar('PIN par défaut créé (0000). Modifiez‑le dès que possible.',
+              erreur: false);
         }
       }
     } catch (e) {
@@ -105,6 +104,18 @@ class _BiometriePageState extends State<BiometriePage> {
   }
 
   Future<void> _update(String key, bool value) async {
+    if (key != 'pin' && !value && !_biometrie['pin'] && 
+        !(_biometrie['empreinte'] || _biometrie['reconnaissance'] || value)) {
+      _showSnackBar('Vous devez garder au moins une méthode d’authentification active.',
+          erreur: true);
+      return;
+    }
+    if (key == 'pin' && !value && !_biometrie['empreinte'] && !_biometrie['reconnaissance']) {
+      _showSnackBar('Vous devez garder au moins une méthode d’authentification active.',
+          erreur: true);
+      return;
+    }
+
     setState(() => _biometrie[key] = value);
     await _savePreference(key, value);
     setState(() => _saved = true);
@@ -114,8 +125,7 @@ class _BiometriePageState extends State<BiometriePage> {
   }
 
   String _hashPin(String pin) {
-    final trimmed = pin.trim();
-    final bytes = utf8.encode(trimmed);
+    final bytes = utf8.encode(pin.trim());
     final digest = sha256.convert(bytes);
     return digest.toString();
   }
@@ -170,14 +180,6 @@ class _BiometriePageState extends State<BiometriePage> {
     }
 
     final hashSaisi = _hashPin(pin);
-    if (kDebugMode) {
-      print("=== Vérification PIN ===");
-      print("ID commerçant : ${widget.commercantId}");
-      print("PIN saisi : $pin");
-      print("Hash saisi : $hashSaisi");
-      print("Hash stocké : $storedHash");
-    }
-
     final correct = storedHash == hashSaisi;
     if (!correct) {
       await _incrementerTentatives();
@@ -344,7 +346,8 @@ class _BiometriePageState extends State<BiometriePage> {
                     return;
                   }
                   if (nouveau.length < 4) {
-                    _showSnackBar('Le nouveau PIN doit comporter au moins 4 chiffres', erreur: true);
+                    _showSnackBar('Le nouveau PIN doit comporter au moins 4 chiffres',
+                        erreur: true);
                     return;
                   }
                   if (nouveau != confirmation) {
@@ -433,7 +436,7 @@ class _BiometriePageState extends State<BiometriePage> {
     return Scaffold(
       backgroundColor: kBg,
       appBar: AppBar(
-        title: const Text('Biométrie', style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text('Biométrie et sécurité', style: TextStyle(fontWeight: FontWeight.bold)),
         backgroundColor: kGreen,
         foregroundColor: kWhite,
         elevation: 0,

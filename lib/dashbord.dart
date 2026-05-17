@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'login.dart';
 import 'dettes.dart';
 import 'fournisseurs_page.dart';
@@ -56,7 +57,7 @@ class _DS {
 
   static List<BoxShadow> get shadowSm => [
     BoxShadow(
-      color: const Color(0xFF0A5C47).withValues(alpha: 0.08),
+      color: const Color(0xFF0A5C47).withOpacity(0.08),
       blurRadius: 8,
       offset: const Offset(0, 2),
     ),
@@ -188,9 +189,6 @@ class _DashboardPageState extends State<DashboardPage>
         .subscribe();
   }
 
-  // ─────────────────────────────────────────
-  // CHARGEMENT : toutes les transactions (sans limit, tri global, puis 12 plus récentes)
-  // ─────────────────────────────────────────
   Future<void> _chargerDonnees() async {
     if (!mounted) return;
     if (_transactions.isEmpty) setState(() => _loading = true);
@@ -421,22 +419,16 @@ class _DashboardPageState extends State<DashboardPage>
 
   Future<void> _deconnecter() async {
     _closeSidebar();
+    // Supprimer les données locales
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.clear();
     try { await _supabase.auth.signOut(); } catch (_) {}
     if (!mounted) return;
     Navigator.pushAndRemoveUntil(
-        context,
-        PageRouteBuilder(
-          pageBuilder: (_, __, ___) => LoginPage(
-            commercantId:  widget.commercantId,
-            nomCommercant: widget.nomCommercant,
-            nomBoutique:   widget.nomBoutique,
-            ville:         widget.ville,
-          ),
-          transitionsBuilder: (_, a, __, child) =>
-              FadeTransition(opacity: a, child: child),
-          transitionDuration: const Duration(milliseconds: 400),
-        ),
-        (_) => false);
+      context,
+      MaterialPageRoute(builder: (_) => const LoginPage()), // ← plus de paramètres
+      (route) => false,
+    );
   }
 
   void _toggleSidebar() {
@@ -530,10 +522,10 @@ class _DashboardPageState extends State<DashboardPage>
             builder: (_, __) => Container(
               width: 44, height: 44,
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.12),
+                color: Colors.white.withOpacity(0.12),
                 borderRadius: BorderRadius.circular(14),
                 border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.20), width: 1),
+                    color: Colors.white.withOpacity(0.20), width: 1),
               ),
               child: Center(
                 child: Column(
@@ -563,7 +555,7 @@ class _DashboardPageState extends State<DashboardPage>
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('Bonjour 👋',
                 style: _DS.body(12,
-                    color: Colors.white.withValues(alpha: 0.65))),
+                    color: Colors.white.withOpacity(0.65))),
             const SizedBox(height: 2),
             Text(widget.nomCommercant,
                 style: _DS.display(17, color: Colors.white)),
@@ -579,10 +571,10 @@ class _DashboardPageState extends State<DashboardPage>
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.40), width: 2),
+                  color: Colors.white.withOpacity(0.40), width: 2),
               boxShadow: [
                 BoxShadow(
-                  color: _DS.gold.withValues(alpha: 0.35),
+                  color: _DS.gold.withOpacity(0.35),
                   blurRadius: 12,
                   offset: const Offset(0, 4),
                 ),
@@ -777,11 +769,11 @@ class _DashboardPageState extends State<DashboardPage>
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.40),
+                          color: Colors.white.withOpacity(0.40),
                           width: 2.5),
                       boxShadow: [
                         BoxShadow(
-                          color: _DS.gold.withValues(alpha: 0.4),
+                          color: _DS.gold.withOpacity(0.4),
                           blurRadius: 12,
                           offset: const Offset(0, 4),
                         ),
@@ -797,12 +789,12 @@ class _DashboardPageState extends State<DashboardPage>
                     padding: const EdgeInsets.symmetric(
                         horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.15),
+                      color: Colors.white.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Text('${widget.nomBoutique} · ${widget.ville}',
                         style: _DS.body(11,
-                            color: Colors.white.withValues(alpha: 0.80))),
+                            color: Colors.white.withOpacity(0.80))),
                   ),
                 ]),
           ),
@@ -911,7 +903,7 @@ class _DashboardPageState extends State<DashboardPage>
                 ? GestureDetector(
                     onTap: _closeSidebar,
                     child: Container(
-                      color: _DS.ink.withValues(alpha: 0.45 * _sidebarAnim.value),
+                      color: _DS.ink.withOpacity(0.45 * _sidebarAnim.value),
                     ),
                   )
                 : const SizedBox.shrink(),
@@ -960,7 +952,7 @@ class _QuickActionImage extends StatelessWidget {
               borderRadius: BorderRadius.circular(20),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.05),
+                  color: Colors.black.withOpacity(0.05),
                   blurRadius: 6,
                   offset: const Offset(0, 2),
                 ),
@@ -1018,7 +1010,6 @@ class _TxCard extends StatelessWidget {
     final couleur  = tx['couleur']  as Color? ?? _DS.slate;
     final source   = tx['source']   as String? ?? '';
 
-    // Signe (+ pour entrées, - pour dépenses)
     String signe = '';
     if (source == 'vente' || source == 'paiement_client') {
       signe = '+';
@@ -1067,7 +1058,6 @@ class _TxCard extends StatelessWidget {
           border: Border.all(color: _DS.mist, width: 0.8),
         ),
         child: Row(children: [
-          // Image
           Container(
             width: 48, height: 48,
             decoration: BoxDecoration(color: couleur.withOpacity(0.1), borderRadius: BorderRadius.circular(13)),

@@ -9,7 +9,7 @@ final _supa = Supabase.instance.client;
 final List<_ModePaiement> _modesPaiement = [
   _ModePaiement(nom: 'Espèces', icone: Icons.money, imageAsset:'assets/images/cash.jpg', couleur: green),
   _ModePaiement(nom: 'Wave', icone: Icons.waves, imageAsset: 'assets/images/wave.png', couleur: Colors.blue.shade700),
-  _ModePaiement(nom: 'Orange Money', icone: Icons.phone_android, imageAsset: 'assets/images/orange-money.png', couleur: Colors.orange),
+  _ModePaiement(nom: 'Orange Money', icone: Icons.phone_android, imageAsset: 'assets/images/orangeMoney.png', couleur: Colors.orange),
 ];
 
 class _ModePaiement {
